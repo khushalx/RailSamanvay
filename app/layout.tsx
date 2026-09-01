@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('http://localhost:3000'),
+  metadataBase: new URL('https://railsamanvay-sih26027.khushaldangar.chatgpt.site'),
   title: 'RailSamanvay | Weekly Block Planning',
   description:
     'Explainable, safety-constrained maintenance block planning decision support for Indian Railways.',
