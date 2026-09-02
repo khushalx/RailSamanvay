@@ -1,5 +1,6 @@
 import { WeeklyPlanPage } from '@/components/weekly-plan-page';
 
-export default function HomePage() {
+export default function WeeklyPlanningRoute() {
   return <WeeklyPlanPage />;
 }
+
