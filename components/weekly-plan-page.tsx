@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Clock3,
   Info,
+  ListChecks,
   RefreshCw,
   Send,
   ShieldCheck,
@@ -18,15 +19,15 @@ import { PageHeading } from '@/components/page-heading';
 import { RailShell } from '@/components/rail-shell';
 import { StatusBadge } from '@/components/status-badge';
 import { TaskDetailDialog } from '@/components/task-detail-dialog';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
@@ -48,22 +49,17 @@ import { usePrototype } from '@/components/prototype-provider';
 import { formatPlanningDate, formatTimestamp } from '@/lib/format';
 import {
   candidateWindows,
-  divisions,
   plans,
   scenarioLabels,
-  sectionsByDivision,
-  type CandidateWindow,
   type PlanId,
   type PlanningScenario,
   type Task,
 } from '@/lib/rail-data';
 import { cn } from '@/lib/utils';
 
-const planPositions: Record<PlanId, { left: string; width: string }> = {
-  A: { left: '38.9%', width: '27.8%' },
-  B: { left: '43.1%', width: '27.8%' },
-  C: { left: '36.1%', width: '36.1%' },
-};
+function taskSignature(taskIds: string[]) {
+  return [...taskIds].sort().join('|');
+}
 
 export function WeeklyPlanPage() {
   const {
@@ -74,44 +70,53 @@ export function WeeklyPlanPage() {
     toggleTask,
     revalidateDraft,
     submitForReview,
-    simulateReplan,
   } = usePrototype();
-  const [selectedWindowId, setSelectedWindowId] = useState<CandidateWindow['id']>('selected');
   const [taskDetail, setTaskDetail] = useState<Task | null>(null);
-  const [whyOpen, setWhyOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [plannerNote, setPlannerNote] = useState('');
   const [notice, setNotice] = useState('');
   const [validating, setValidating] = useState(false);
+  const submitLock = useRef(false);
 
   const plan = plans[state.selectedPlanId];
   const selectedTasks = state.tasks.filter((task) =>
     state.selectedTaskIds.includes(task.id),
   );
-  const eligibleTasks = state.tasks.filter((task) => !task.quarantined).slice(0, 5);
-  const inspectedWindow = useMemo(() => {
-    const candidate = candidateWindows.find((window) => window.id === selectedWindowId) ?? candidateWindows[1];
-    return candidate.id === 'selected'
-      ? { ...candidate, time: plan.window, reason: plan.rationale, impactMinutes: plan.impactMinutes }
-      : candidate;
-  }, [plan, selectedWindowId]);
+  const eligibleTasks = useMemo(
+    () =>
+      state.tasks
+        .filter((task) => !task.quarantined)
+        .sort((left, right) => {
+          const leftSelected = state.selectedTaskIds.includes(left.id) ? 1 : 0;
+          const rightSelected = state.selectedTaskIds.includes(right.id) ? 1 : 0;
+          return rightSelected - leftSelected || right.priority - left.priority;
+        }),
+    [state.selectedTaskIds, state.tasks],
+  );
+  const signature = taskSignature(state.selectedTaskIds);
   const currentApproval = state.approvals.find(
     (approval) =>
       approval.version === state.recommendationVersion &&
       approval.section === state.section &&
-      approval.planningDate === state.planningDate,
+      approval.planningDate === state.planningDate &&
+      approval.planId === state.selectedPlanId &&
+      taskSignature(approval.selectedTaskIds) === signature,
   );
+  const canGenerate =
+    state.runStatus !== 'running' &&
+    state.dataGate === 'ready' &&
+    Boolean(state.planningDate);
 
   async function handleGenerate() {
+    if (!canGenerate) return;
     setNotice('');
     const result = await generatePlans();
-    setSelectedWindowId('selected');
     setNotice(
       result === 'feasible'
-        ? 'Three deterministic alternatives generated and checked against the demo hard constraints.'
+        ? 'Recommendation ready. Review the plan, selected work and safety details below.'
         : result === 'infeasible'
-          ? 'No hard-feasible recommendation exists for this fixture. Named conflicts are shown below.'
-          : 'Generation stopped: the COA snapshot is stale.',
+          ? 'No safe recommendation exists for this test condition. The blocking conflicts are shown below.'
+          : 'Generation stopped because the planning data gate is blocked.',
     );
   }
 
@@ -119,13 +124,22 @@ export function WeeklyPlanPage() {
     setValidating(true);
     const valid = await revalidateDraft();
     setValidating(false);
-    setNotice(valid ? 'Task set revalidated against the deterministic demo constraints.' : 'Revalidation is unavailable until data is ready.');
+    setNotice(
+      valid
+        ? 'The edited task set passed the demo hard-constraint check.'
+        : state.selectedTaskIds.length > 4
+          ? 'This fixture supports at most four coordinated tasks. Remove a task and try again.'
+          : 'The task set is missing mandatory work or includes an ineligible record.',
+    );
   }
 
   function handleSubmit() {
+    if (submitLock.current) return;
+    submitLock.current = true;
     const approvalId = submitForReview(plannerNote);
+    submitLock.current = false;
     if (!approvalId) {
-      setNotice('Submission blocked. Generate and validate a feasible draft first.');
+      setNotice('Submission blocked. Generate and validate a safe draft first.');
       return;
     }
     setReviewOpen(false);
@@ -138,318 +152,335 @@ export function WeeklyPlanPage() {
       <PageHeading
         eyebrow={`Weekly planning · ${formatPlanningDate(state.planningDate)}`}
         title="Weekly Block Plan"
-        description="Compare protected corridor capacity with Engineering, S&T and TRD maintenance demand."
+        description="Turn cross-department maintenance demand into one clear, reviewable railway block recommendation."
         action={
-          <div className="flex items-center gap-2 text-xs text-[#526675]">
-            <Clock3 className="size-3.5" aria-hidden="true" />
-            Run {formatTimestamp(state.lastRunAt)} IST
-          </div>
+          state.lastRunAt ? (
+            <div className="flex items-center gap-2 text-xs text-[#526675]">
+              <Clock3 className="size-4" aria-hidden="true" />
+              Last checked {formatTimestamp(state.lastRunAt)} IST
+            </div>
+          ) : null
         }
       />
 
-      <Card className="mb-4 gap-0 rounded-lg py-0 shadow-none ring-[#d8e0e4]">
-        <CardContent className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="division" className="text-[11px] uppercase tracking-[0.09em] text-[#637483]">Division</Label>
-              <NativeSelect id="division" className="w-full" value={state.division} disabled={state.runStatus === 'running'} onChange={(event) => setPlanningField('division', event.target.value)}>
-                {divisions.map((division) => <NativeSelectOption key={division} value={division}>{division}</NativeSelectOption>)}
-              </NativeSelect>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="section" className="text-[11px] uppercase tracking-[0.09em] text-[#637483]">Railway section</Label>
-              <NativeSelect id="section" className="w-full" value={state.section} disabled={state.runStatus === 'running'} onChange={(event) => setPlanningField('section', event.target.value)}>
-                {sectionsByDivision[state.division].map((section) => (
-                  <NativeSelectOption key={section} value={section}>{section}</NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="planning-date" className="text-[11px] uppercase tracking-[0.09em] text-[#637483]">Planning date</Label>
-              <Input id="planning-date" type="date" value={state.planningDate} disabled={state.runStatus === 'running'} onChange={(event) => setPlanningField('planningDate', event.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="scenario" className="text-[11px] uppercase tracking-[0.09em] text-[#637483]">Demo scenario</Label>
-              <NativeSelect id="scenario" className="w-full" value={state.scenario} disabled={state.runStatus === 'running'} onChange={(event) => setPlanningField('scenario', event.target.value as PlanningScenario)}>
-                {(Object.entries(scenarioLabels) as Array<[PlanningScenario, string]>).map(([value, label]) => (
-                  <NativeSelectOption key={value} value={value}>{label}</NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </div>
+      <Card className="mb-5 gap-0 rounded-xl py-0 shadow-none ring-[#d8e0e4]">
+        <CardContent className="grid gap-4 p-4 lg:grid-cols-[minmax(260px,1fr)_200px_240px_auto] lg:items-end">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#657682]">Planning corridor</p>
+            <p className="mt-1 text-sm font-semibold text-[#163247]">{state.division}</p>
+            <p className="mt-0.5 text-sm text-[#526675]">{state.section}</p>
           </div>
-          <Button className="h-9 bg-[#0b6871] px-4 text-white hover:bg-[#075860]" onClick={handleGenerate} disabled={state.runStatus === 'running'}>
-            {state.runStatus === 'running' ? <RefreshCw className="size-4 animate-spin" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}
-            {state.runStatus === 'running' ? 'Checking constraints…' : 'Generate plans'}
+          <div className="space-y-1.5">
+            <Label htmlFor="planning-date">Planning date</Label>
+            <Input
+              id="planning-date"
+              className="h-11"
+              type="date"
+              required
+              value={state.planningDate}
+              disabled={state.runStatus === 'running'}
+              aria-invalid={!state.planningDate}
+              onChange={(event) => setPlanningField('planningDate', event.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="scenario">Test condition</Label>
+            <NativeSelect
+              id="scenario"
+              className="w-full [&_select]:h-11"
+              value={state.scenario}
+              disabled={state.runStatus === 'running'}
+              onChange={(event) =>
+                setPlanningField('scenario', event.target.value as PlanningScenario)
+              }
+            >
+              {(Object.entries(scenarioLabels) as Array<[PlanningScenario, string]>).map(
+                ([value, label]) => (
+                  <NativeSelectOption key={value} value={value}>
+                    {label}
+                  </NativeSelectOption>
+                ),
+              )}
+            </NativeSelect>
+          </div>
+          <Button
+            className={cn(
+              'h-11 px-4',
+              state.runStatus === 'feasible'
+                ? 'border-[#b9c8ce] bg-white text-[#163247] hover:bg-[#f1f4f5]'
+                : 'bg-[#0b6871] text-white hover:bg-[#075860]',
+            )}
+            variant={state.runStatus === 'feasible' ? 'outline' : 'default'}
+            disabled={!canGenerate}
+            aria-busy={state.runStatus === 'running'}
+            onClick={handleGenerate}
+          >
+            {state.runStatus === 'running' ? (
+              <RefreshCw className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+            ) : (
+              <ArrowRight className="size-4" aria-hidden="true" />
+            )}
+            {state.runStatus === 'running'
+              ? 'Checking…'
+              : state.runStatus === 'feasible'
+                ? 'Regenerate'
+                : 'Generate recommendation'}
           </Button>
         </CardContent>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-[#e4e9eb] bg-[#f8fafb] px-4 py-2.5 text-xs text-[#526675]">
-          <span className="font-semibold uppercase tracking-[0.08em] text-[#91450f]">Simulation</span>
-          <span className="flex items-center gap-1.5">
-            <span className={cn('size-2 rounded-full', state.dataGate === 'ready' ? 'bg-[#21835d]' : 'bg-[#b4443f]')} />
-            {state.dataGate === 'ready' ? 'Demo snapshot valid' : 'COA snapshot stale'}
-          </span>
-          <span>Rule pack Division-X v3.2</span>
-          <span className="ml-auto hidden text-[#637483] xl:inline">No live Railway connector</span>
-        </div>
-        {notice ? <output aria-live="polite" className="border-t border-[#cfe1e2] bg-[#f0f8f8] px-4 py-2 text-xs text-[#075f69]">{notice}</output> : null}
+
+        {state.dataGate !== 'ready' ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#efc8c5] bg-[#fff6f5] px-4 py-3 text-sm text-[#7c3d39]">
+            <span className="flex items-center gap-2">
+              <AlertTriangle className="size-4" aria-hidden="true" />
+              Control Office data is stale, so new planning is blocked.
+            </span>
+            <Link href="/audit-data-health" className="font-semibold text-[#8f3834] underline underline-offset-4">
+              Refresh data
+            </Link>
+          </div>
+        ) : !state.planningDate ? (
+          <p role="alert" className="border-t border-[#efc8c5] bg-[#fff6f5] px-4 py-3 text-sm text-[#7c3d39]">
+            Choose a planning date to continue.
+          </p>
+        ) : null}
+
+        {notice ? (
+          <output aria-live="polite" className="block border-t border-[#cfe1e2] bg-[#f0f8f8] px-4 py-3 text-sm text-[#075f69]">
+            {notice}
+          </output>
+        ) : null}
       </Card>
 
       {state.runStatus === 'running' ? <LoadingState /> : null}
-      {state.runStatus === 'idle' ? (
-        <EmptyRun onGenerate={handleGenerate} />
-      ) : null}
-      {state.runStatus === 'blocked' ? (
-        <BlockedRun />
-      ) : null}
-      {state.runStatus === 'infeasible' ? (
-        <InfeasibleRun />
-      ) : null}
+      {state.runStatus === 'idle' ? <EmptyState /> : null}
+      {state.runStatus === 'blocked' ? <BlockedState /> : null}
+      {state.runStatus === 'infeasible' ? <InfeasibleState /> : null}
 
       {state.runStatus === 'feasible' ? (
-        <div className="space-y-4">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.65fr)]">
-            <Card className="gap-0 rounded-lg py-0 shadow-none ring-[#d8e0e4]">
-              <CardHeader className="border-b border-[#e4e9eb] px-5 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-[15px] font-semibold text-[#163247]">Corridor opportunity timeline</CardTitle>
-                    <CardDescription className="mt-1 text-xs">{state.section} · 00:00–06:00</CardDescription>
-                  </div>
-                  <Badge variant="outline" className="rounded-md border-[#b9d3d6] bg-[#f1f8f8] text-[#075f69]">3 candidate windows</Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="overflow-x-auto px-5 py-5">
-                <div className="min-w-[610px]" aria-label={`Plan ${plan.id} uses ${plan.window}; three candidate windows were evaluated`}>
-                  <div className="mb-2 grid grid-cols-7 text-xs tabular-nums text-[#637483]">
-                    {['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00'].map((time) => <span key={time}>{time}</span>)}
-                  </div>
-                  <div className="relative h-16 overflow-hidden rounded-md border border-[#d8e0e4] bg-[repeating-linear-gradient(to_right,#f7f9fa_0,#f7f9fa_calc(16.66%-1px),#dfe5e8_calc(16.66%-1px),#dfe5e8_16.66%)]">
-                    <span className="absolute top-2 left-[4%] h-3 w-[10%] rounded-sm bg-[#8ea1ae]" />
-                    <span className="absolute top-2 left-[36%] h-3 w-[8%] rounded-sm bg-[#8ea1ae]" />
-                    <span className="absolute top-2 left-[70%] h-3 w-[13%] rounded-sm bg-[#8ea1ae]" />
-                    <span className="absolute bottom-2 rounded bg-[#0b737a] px-2 py-1 text-center text-[11px] font-semibold text-white" style={planPositions[plan.id]}>
-                      Plan {plan.id} · {plan.window}
-                    </span>
-                  </div>
-                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                    {candidateWindows.map((window) => {
-                      const active = selectedWindowId === window.id;
-                      const shownTime = window.id === 'selected' ? plan.window : window.time;
-                      return (
-                        <button
-                          key={window.id}
-                          type="button"
-                          aria-pressed={active}
-                          onClick={() => setSelectedWindowId(window.id)}
-                          className={cn(
-                            'rounded-md border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#0b737a]/25',
-                            active ? 'border-[#0b737a] bg-[#eef7f7]' : 'border-[#d8e0e4] bg-white hover:bg-[#f6f8f9]',
-                          )}
-                        >
-                          <span className="flex items-center justify-between gap-2 text-xs font-semibold text-[#163247]">
-                            {shownTime}
-                            <span className={window.status === 'Eligible' ? 'text-[#246c50]' : 'text-[#9d403d]'}>{window.status}</span>
-                          </span>
-                          <span className="mt-1 block text-xs text-[#637483]">BSS {window.bss} · {window.impactMinutes} impact min</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className={cn('mt-3 rounded-md border p-3', inspectedWindow.status === 'Eligible' ? 'border-[#bfd9ca] bg-[#f0f8f3]' : 'border-[#ebc4c1] bg-[#fff7f5]')}>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-[#163247]">{inspectedWindow.time}</p>
-                      <StatusBadge status={inspectedWindow.status} />
-                    </div>
-                    <p className="mt-1 text-xs leading-5 text-[#526675]">{inspectedWindow.reason}</p>
-                    <p className="mt-2 text-xs text-[#637483]">Train: {inspectedWindow.trainConflict} · Freight: {inspectedWindow.freightConflict} · Snapshot fresh</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="gap-0 rounded-lg border-t-[3px] border-t-[#0b737a] py-0 shadow-none ring-[#cddbdd]">
-              <CardHeader className="border-b border-[#e4e9eb] px-5 py-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex rounded-lg border border-[#cbd6db] p-0.5" aria-label="Select recommendation plan">
-                    {(Object.keys(plans) as PlanId[]).map((planId) => (
-                      <Button key={planId} size="sm" variant={state.selectedPlanId === planId ? 'default' : 'ghost'} aria-pressed={state.selectedPlanId === planId} onClick={() => { selectPlan(planId); setSelectedWindowId('selected'); }} className={state.selectedPlanId === planId ? 'bg-[#0b6871] text-white' : 'text-[#526675]'}>
-                        Plan {planId}
-                      </Button>
-                    ))}
-                  </div>
-                  <span className="flex items-center gap-1.5 text-xs font-medium text-[#246c50]"><CheckCircle2 className="size-3.5" aria-hidden="true" />Hard-feasible</span>
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <Badge className="rounded-md bg-[#e7f2f3] text-[#075f69]">{plan.label}</Badge>
-                  <span className="text-xs text-[#637483]">Synthetic alternative</span>
-                </div>
-                <CardTitle className="mt-2 text-[28px] font-semibold tracking-[-0.03em] text-[#102a40]">{plan.window}</CardTitle>
-                <CardDescription>{plan.mode}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4 px-5 py-4">
-                <div className="grid grid-cols-3 gap-2">
-                  <Metric label="Protected" value={`${plan.protectedMinutes} min`} />
-                  <Metric label="Train impact" value={`${plan.impactMinutes} min`} />
-                  <Metric label="Utilization" value={`${plan.utilization}%`} />
-                </div>
-                <div className="rounded-md bg-[#f5f8f8] p-3">
-                  <p className="text-xs font-semibold text-[#163247]">Why it ranks here</p>
-                  <p className="mt-1 text-xs leading-5 text-[#526675]">{plan.rationale}</p>
-                  <Button variant="link" className="mt-1 h-auto p-0 text-xs" onClick={() => setWhyOpen(true)}>View explanation <ChevronRight className="size-3" /></Button>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#e4e9eb] pt-3 text-xs text-[#637483]">
-                  <span>{plan.confidence}% confidence · P90 {plan.p90Minutes} min</span>
-                  <span>Rec v{state.recommendationVersion}</span>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card className="gap-0 rounded-lg py-0 shadow-none ring-[#d8e0e4]">
-            <CardHeader className="border-b border-[#e4e9eb] px-5 py-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="space-y-5">
+          <Card className="gap-0 rounded-xl border-t-4 border-t-[#0b737a] py-0 shadow-[0_12px_34px_rgba(16,42,64,0.07)] ring-[#cddbdd]">
+            <CardHeader className="border-b border-[#e4e9eb] px-5 py-5 sm:px-6">
+              <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
                 <div>
-                  <CardTitle className="text-[15px] font-semibold text-[#163247]">Execution sequence</CardTitle>
-                  <CardDescription className="mt-1 text-xs">Grouping is conditional; protection, isolation and handback remain explicit.</CardDescription>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className="rounded-md bg-[#e8f2f4] text-[#075f69]">{plan.label}</Badge>
+                    <StatusBadge status={state.draftDirty ? 'Revalidation required' : 'Ready'} />
+                  </div>
+                  <h2 className="mt-3 text-2xl font-semibold tracking-[-0.02em] text-[#102a40]">
+                    Plan {plan.id} · {plan.window}
+                  </h2>
+                  <p className="mt-1 text-sm text-[#526675]">
+                    {selectedTasks.length} work items across {new Set(selectedTasks.map((task) => task.department)).size} departments
+                  </p>
                 </div>
-                <Badge variant="outline" className="rounded-md">P90 {plan.p90Minutes} min</Badge>
+                <p className="max-w-xl text-sm leading-6 text-[#526675]">{plan.rationale}</p>
               </div>
             </CardHeader>
-            <CardContent className="overflow-x-auto px-5 py-5">
-              <div className="min-w-[700px] space-y-2">
-                <SequenceRow label="Protect & isolate" width="18%" offset="0%" tone="bg-[#526675]" detail="Protection + TPC confirmation" />
-                <SequenceRow label="Engineering E-17" width="55%" offset="14%" tone="bg-[#0b737a]" detail="Mandatory track work" />
-                {state.selectedTaskIds.includes('S-08') ? <SequenceRow label="S&T S-08" width="26%" offset="22%" tone="bg-[#f47a1f]" detail="Conditional overlap" /> : null}
-                {state.selectedTaskIds.includes('T-11') ? <SequenceRow label="TRD T-11" width="34%" offset="48%" tone="bg-[#405d86]" detail="After isolation confirmation" /> : null}
-                <SequenceRow label="Joint handback" width="18%" offset="82%" tone="bg-[#21835d]" detail="Restore + release" />
+            <CardContent className="space-y-6 p-5 sm:p-6">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <Metric label="Protected time" value={`${plan.protectedMinutes} min`} />
+                <Metric label="Expected delay" value={`${plan.impactMinutes} min`} />
+                <Metric label="Safety duration" value={`${plan.p90Minutes} min`} />
+                <Metric label="Capacity used" value={`${plan.utilization}%`} />
+              </div>
+
+              <fieldset>
+                <legend className="text-sm font-semibold text-[#163247]">Compare safe alternatives</legend>
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  {(Object.values(plans) as Array<(typeof plans)[PlanId]>).map((alternative) => {
+                    const active = alternative.id === state.selectedPlanId;
+                    return (
+                      <button
+                        key={alternative.id}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => {
+                          selectPlan(alternative.id);
+                          setNotice('');
+                        }}
+                        className={cn(
+                          'min-h-28 rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#0b737a]/25',
+                          active
+                            ? 'border-[#0b737a] bg-[#eef7f7]'
+                            : 'border-[#d8e0e4] bg-white hover:border-[#afc2c9] hover:bg-[#f7f9fa]',
+                        )}
+                      >
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-semibold text-[#163247]">Plan {alternative.id}</span>
+                          {active ? <CheckCircle2 className="size-4 text-[#0b737a]" aria-hidden="true" /> : null}
+                        </span>
+                        <span className="mt-2 block text-base font-semibold text-[#102a40]">{alternative.window}</span>
+                        <span className="mt-1 block text-xs leading-5 text-[#526675]">
+                          {alternative.impactMinutes} min expected delay · {alternative.taskIds.length} tasks
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 text-xs text-[#657682]">Selecting another plan restores its fixture-supported work set.</p>
+              </fieldset>
+
+              <section aria-labelledby="selected-work-heading">
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h3 id="selected-work-heading" className="text-base font-semibold text-[#163247]">Selected maintenance work</h3>
+                    <p className="mt-1 text-sm text-[#526675]">Mandatory work stays locked. Optional edits must be revalidated.</p>
+                  </div>
+                  <span className="text-sm font-semibold tabular-nums text-[#075f69]">{selectedTasks.length} selected</span>
+                </div>
+                <div className="mt-3 divide-y divide-[#e4e9eb] overflow-hidden rounded-xl border border-[#d8e0e4] bg-white">
+                  {eligibleTasks.map((task) => {
+                    const checked = state.selectedTaskIds.includes(task.id);
+                    return (
+                      <div key={task.id} className="flex min-h-16 items-center gap-3 px-4 py-3">
+                        <Checkbox
+                          id={`plan-task-${task.id}`}
+                          checked={checked}
+                          disabled={task.mandatory || validating}
+                          aria-label={`${checked ? 'Remove' : 'Add'} ${task.id} ${task.title}`}
+                          onCheckedChange={() => toggleTask(task.id)}
+                        />
+                        <label htmlFor={`plan-task-${task.id}`} className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-xs font-semibold text-[#0b737a]">{task.id}</span>
+                            <span className="text-sm font-medium text-[#163247]">{task.title}</span>
+                            {task.mandatory ? <Badge className="rounded-md bg-[#fff0e2] text-[#91450f]">Mandatory</Badge> : null}
+                          </span>
+                          <span className="mt-1 block text-xs text-[#657682]">{task.department} · safety duration {task.p90Minutes} min</span>
+                        </label>
+                        <Button variant="ghost" className="h-10 px-2 text-[#075f69]" onClick={() => setTaskDetail(task)}>
+                          View <ChevronRight className="size-4" aria-hidden="true" />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {state.draftDirty ? (
+                <div className="flex flex-col justify-between gap-3 rounded-xl border border-[#e6d5bd] bg-[#fff9f1] p-4 sm:flex-row sm:items-center">
+                  <div>
+                    <p className="text-sm font-semibold text-[#75431d]">Revalidation required</p>
+                    <p className="mt-1 text-sm text-[#7b5a3c]">
+                      {state.selectedTaskIds.length > 4
+                        ? 'This fixture can coordinate at most four work items.'
+                        : 'The selected work changed after the recommendation was generated.'}
+                    </p>
+                  </div>
+                  <Button variant="outline" className="h-11 bg-white" disabled={validating} onClick={handleRevalidate}>
+                    {validating ? <RefreshCw className="motion-safe:animate-spin" /> : <ShieldCheck />}
+                    {validating ? 'Checking…' : 'Revalidate work'}
+                  </Button>
+                </div>
+              ) : null}
+
+              <div className="flex flex-col gap-3 border-t border-[#e4e9eb] pt-5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-[#163247]">
+                    {currentApproval ? 'This exact draft already has an approval record.' : 'Ready for Control Officer review'}
+                  </p>
+                  <p className="mt-1 text-xs text-[#657682]">Prototype only · no traffic or power block is issued</p>
+                </div>
+                {currentApproval ? (
+                  <Link
+                    href={`/approvals?approval=${encodeURIComponent(currentApproval.id)}`}
+                    className={cn(buttonVariants({ variant: 'outline' }), 'h-11 px-4')}
+                  >
+                    Open {currentApproval.id} <ArrowRight />
+                  </Link>
+                ) : (
+                  <Button
+                    className="h-11 bg-[#0b6871] px-4 text-white hover:bg-[#075860]"
+                    disabled={state.draftDirty || state.dataGate !== 'ready'}
+                    onClick={() => setReviewOpen(true)}
+                  >
+                    <Send /> Review and send
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
 
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(340px,0.75fr)]">
-            <Card className="gap-0 rounded-lg py-0 shadow-none ring-[#d8e0e4]">
-              <CardHeader className="border-b border-[#e4e9eb] px-5 py-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-[15px] font-semibold text-[#163247]">Included maintenance work</CardTitle>
-                    <CardDescription className="mt-1 text-xs">Change optional work, then revalidate before sending.</CardDescription>
-                  </div>
-                  {state.draftDirty ? <StatusBadge status="Revalidation required" /> : <Badge className="rounded-md bg-[#edf7f1] text-[#246c50]">Validated</Badge>}
-                </div>
-              </CardHeader>
-              <CardContent className="divide-y divide-[#e4e9eb] px-5 py-0">
-                {eligibleTasks.map((task) => {
-                  const checked = state.selectedTaskIds.includes(task.id);
-                  return (
-                    <div key={task.id} className="grid gap-3 py-3 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
-                      <Checkbox checked={checked} disabled={task.mandatory} onCheckedChange={() => toggleTask(task.id)} aria-label={`${checked ? 'Remove' : 'Include'} ${task.id} ${task.title}`} />
-                      <button type="button" className="min-w-0 text-left" onClick={() => setTaskDetail(task)}>
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono text-xs font-semibold text-[#0b737a]">{task.id}</span>
-                          <span className="text-sm font-medium text-[#163247]">{task.title}</span>
-                          {task.mandatory ? <Badge className="rounded-md bg-[#e8f2f4] text-[#075f69]">Mandatory</Badge> : null}
-                        </span>
-                        <span className="mt-1 block text-xs text-[#637483]">{task.department} · {task.worksite} · P90 {task.p90Minutes} min</span>
-                      </button>
-                      <Button variant="ghost" size="sm" className="justify-self-start text-[#0b6871] sm:justify-self-end" onClick={() => setTaskDetail(task)}>Details</Button>
+          <Card className="gap-0 rounded-xl py-0 shadow-none ring-[#d8e0e4]">
+            <CardContent className="px-5 py-1 sm:px-6">
+              <Accordion>
+                <AccordionItem value="windows">
+                  <AccordionTrigger className="min-h-12 no-underline hover:no-underline">
+                    <span><strong className="text-[#163247]">Window screening</strong><span className="ml-2 text-[#657682]">Why this time was retained</span></span>
+                  </AccordionTrigger>
+                  <AccordionContent className="pb-5">
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {candidateWindows.map((window) => {
+                        const shownTime = window.id === 'selected' ? plan.window : window.time;
+                        const selected = window.id === 'selected';
+                        return (
+                          <div key={window.id} className={cn('rounded-lg border p-4', selected ? 'border-[#b9d3d6] bg-[#f1f8f8]' : 'border-[#d8e0e4] bg-[#f8f9fa]')}>
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-semibold text-[#163247]">{shownTime}</p>
+                              <StatusBadge status={selected ? 'Eligible' : 'Rejected'} />
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-[#526675]">{selected ? plan.rationale : window.reason}</p>
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
-              </CardContent>
-              <div className="flex flex-col gap-3 border-t border-[#e4e9eb] bg-[#f8fafb] px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-xs text-[#637483]">Mandatory E-17 cannot be removed. Quarantined tasks are excluded.</p>
-                {state.draftDirty ? <Button variant="outline" onClick={handleRevalidate} disabled={validating}>{validating ? <RefreshCw className="animate-spin" /> : <ShieldCheck />}{validating ? 'Validating…' : 'Revalidate draft'}</Button> : null}
-              </div>
-            </Card>
-
-            <div className="space-y-4">
-              <Card className="gap-0 rounded-lg py-0 shadow-none ring-[#d8e0e4]">
-                <CardHeader className="border-b border-[#e4e9eb] px-5 py-4">
-                  <CardTitle className="text-[15px] font-semibold text-[#163247]">Illustrative outcome</CardTitle>
-                  <CardDescription className="mt-1 text-xs">Before vs recommended fixture</CardDescription>
-                </CardHeader>
-                <CardContent className="divide-y divide-[#e4e9eb] px-5 py-1">
-                  <KpiRow label="Possession minutes" before="225" after={`${plan.protectedMinutes}`} />
-                  <KpiRow label="Separate blocks" before="3" after="1" />
-                  <KpiRow label="Train impact minutes" before="24" after={`${plan.impactMinutes}`} />
-                  <KpiRow label="Union utilization" before="66.7%" after={`${plan.utilization}%`} />
-                </CardContent>
-              </Card>
-
-              <Card className="gap-0 rounded-lg py-0 shadow-none ring-[#d8e0e4]">
-                <CardContent className="space-y-3 p-5">
-                  <div className="flex items-start gap-3">
-                    <ShieldCheck className="mt-0.5 size-5 text-[#0b737a]" aria-hidden="true" />
-                    <div>
-                      <p className="text-sm font-semibold text-[#163247]">Planner handoff</p>
-                      <p className="mt-1 text-xs leading-5 text-[#637483]">Send the validated draft to the simulated Control Officer queue. This does not issue a block.</p>
+                  </AccordionContent>
+                </AccordionItem>
+                <AccordionItem value="sequence">
+                  <AccordionTrigger className="min-h-12 no-underline hover:no-underline">
+                    <span><strong className="text-[#163247]">Work sequence and impact</strong><span className="ml-2 text-[#657682]">A simple handback order</span></span>
+                  </AccordionTrigger>
+                  <AccordionContent className="pb-5">
+                    <ol className="grid gap-3 md:grid-cols-2">
+                      {selectedTasks.map((task, index) => (
+                        <li key={task.id} className="flex gap-3 rounded-lg border border-[#d8e0e4] p-4">
+                          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#e8f2f4] text-xs font-semibold text-[#075f69]">{index + 1}</span>
+                          <div><p className="text-sm font-semibold text-[#163247]">{task.title}</p><p className="mt-1 text-xs leading-5 text-[#657682]">{task.department} · {task.p90Minutes} min safety duration · {task.dependency}</p></div>
+                        </li>
+                      ))}
+                    </ol>
+                    <p className="mt-3 text-sm text-[#526675]">Expected train delay is {plan.impactMinutes} minutes. Actual execution remains subject to Railway operating authority and field confirmation.</p>
+                  </AccordionContent>
+                </AccordionItem>
+                <AccordionItem value="safety">
+                  <AccordionTrigger className="min-h-12 no-underline hover:no-underline">
+                    <span><strong className="text-[#163247]">Safety and source details</strong><span className="ml-2 text-[#657682]">Definitions and guardrails</span></span>
+                  </AccordionTrigger>
+                  <AccordionContent className="pb-5">
+                    <div className="grid gap-3 text-sm leading-6 text-[#526675] md:grid-cols-3">
+                      <Detail label="Safety duration (P90)" text="A conservative demo duration that 90% of comparable work is expected to finish within." />
+                      <Detail label="Control Office snapshot" text="Synthetic train-path data used to screen candidate windows. Stale data blocks new planning." />
+                      <Detail label="Block suitability" text="A transparent comparison of task priority, usable capacity, train impact and plan stability." />
                     </div>
-                  </div>
-                  {currentApproval ? (
-                    <div className="rounded-md bg-[#f6f8f9] p-3">
-                      <div className="flex items-center justify-between gap-2"><span className="font-mono text-xs">{currentApproval.id}</span><StatusBadge status={currentApproval.status} /></div>
-                      <Link href="/approvals" className="mt-2 inline-flex text-xs font-medium text-[#0b6871] hover:underline">Open approval record <ChevronRight className="size-3.5" /></Link>
-                    </div>
-                  ) : (
-                    <Button className="w-full bg-[#0b6871] text-white hover:bg-[#075860]" disabled={state.draftDirty} onClick={() => setReviewOpen(true)}><Send />Review & send</Button>
-                  )}
-                  <Button variant="outline" className="w-full" onClick={() => { simulateReplan(); setNotice('Freight materialisation simulated. A new draft version was created; approved records stayed frozen.'); }}><RefreshCw />Simulate freight replan</Button>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </CardContent>
+          </Card>
         </div>
       ) : null}
-
-      <Dialog open={whyOpen} onOpenChange={setWhyOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Why Plan {plan.id}?</DialogTitle>
-            <DialogDescription>Deterministic fixture explanation; no trained ML or live optimizer is used.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="rounded-md bg-[#f5f8f8] p-3 text-sm leading-6 text-[#344b5d]">{plan.rationale} {plan.tradeoff}</div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {plan.objective.map((item) => <Metric key={item.label} label={item.label} value={`${item.value} pts`} />)}
-            </div>
-            <div className="rounded-md border border-[#cfe1e2] p-3">
-              <p className="flex items-center gap-2 text-sm font-semibold text-[#163247]"><ShieldCheck className="size-4 text-[#0b737a]" />Non-relaxable checks</p>
-              <ul className="mt-2 space-y-1 text-xs leading-5 text-[#526675]">
-                <li>• Mandatory task P90 duration fits inside protected time.</li>
-                <li>• Train-path, worksite, isolation and resource constraints passed.</li>
-                <li>• Grouping is conditional, never assumed by department alone.</li>
-              </ul>
-            </div>
-            <p className="text-xs text-[#637483]">Versions: rules v3.2 · source schema v1.4 · deterministic solver fixture v0.3.</p>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Send Plan {plan.id} for officer review</DialogTitle>
-            <DialogDescription>Confirm the exact task set and preserve a planner note in the simulated audit trail.</DialogDescription>
+            <DialogTitle>Send Plan {plan.id} for simulated review?</DialogTitle>
+            <DialogDescription>
+              This creates an auditable, device-local request. It does not sanction a railway block or write to any live system.
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <div className="rounded-md bg-[#f5f7f8] p-3">
-              <div className="flex items-center justify-between gap-2"><span className="text-sm font-semibold text-[#163247]">{plan.window} · {state.section}</span><Badge variant="outline">v{state.recommendationVersion}</Badge></div>
-              <ul className="mt-2 space-y-1 text-xs text-[#526675]">
-                {selectedTasks.map((task) => <li key={task.id}>• {task.id} · {task.title}</li>)}
-              </ul>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="planner-note">Planner note</Label>
-              <Textarea id="planner-note" value={plannerNote} onChange={(event) => setPlannerNote(event.target.value)} placeholder="Optional note for the simulated Control Officer" />
-            </div>
-            <div className="flex items-start gap-2 rounded-md border border-[#e6d5bd] bg-[#fff9f1] p-3 text-xs leading-5 text-[#75431d]">
-              <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              Submission records a prototype approval request only. It does not request or issue a live block.
-            </div>
+          <div className="rounded-xl border border-[#d8e0e4] bg-[#f7f9fa] p-4">
+            <p className="text-sm font-semibold text-[#163247]">{state.section} · {plan.window}</p>
+            <p className="mt-1 text-sm text-[#526675]">{selectedTasks.length} tasks · {plan.impactMinutes} min expected delay · version {state.recommendationVersion}</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="planner-note">Planner note (optional)</Label>
+            <Textarea id="planner-note" value={plannerNote} onChange={(event) => setPlannerNote(event.target.value)} placeholder="Add a coordination note for the simulated Control Officer" />
           </div>
           <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
-            <Button onClick={handleSubmit}><Send />Send to queue</Button>
+            <DialogClose render={<Button variant="outline" className="h-11" />}>Cancel</DialogClose>
+            <Button className="h-11 bg-[#0b6871] text-white hover:bg-[#075860]" onClick={handleSubmit}>
+              <Send /> Send for review
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -460,36 +491,70 @@ export function WeeklyPlanPage() {
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-md bg-[#f5f7f8] p-3"><p className="text-[11px] uppercase tracking-[0.07em] text-[#637483]">{label}</p><p className="mt-1 text-sm font-semibold text-[#163247]">{value}</p></div>;
-}
-
-function SequenceRow({ label, width, offset, tone, detail }: { label: string; width: string; offset: string; tone: string; detail: string }) {
   return (
-    <div className="grid grid-cols-[150px_1fr] items-center gap-3">
-      <span className="text-xs font-medium text-[#344b5d]">{label}</span>
-      <div className="relative h-8 rounded bg-[#f1f4f5]">
-        <span className={cn('absolute inset-y-1 rounded px-2 py-1 text-[10px] font-medium text-white', tone)} style={{ left: offset, width }}>{detail}</span>
-      </div>
+    <div className="rounded-xl bg-[#f2f5f6] p-4">
+      <p className="text-xs font-medium text-[#657682]">{label}</p>
+      <p className="mt-1 text-xl font-semibold tabular-nums text-[#163247]">{value}</p>
     </div>
   );
 }
 
-function KpiRow({ label, before, after }: { label: string; before: string; after: string }) {
-  return <div className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-3 text-xs"><span className="text-[#526675]">{label}</span><span className="tabular-nums text-[#8a4b1c] line-through">{before}</span><span className="min-w-14 text-right font-semibold tabular-nums text-[#246c50]">{after}</span></div>;
+function Detail({ label, text }: { label: string; text: string }) {
+  return (
+    <div className="rounded-lg bg-[#f5f7f8] p-4">
+      <p className="font-semibold text-[#163247]">{label}</p>
+      <p className="mt-1">{text}</p>
+    </div>
+  );
 }
 
 function LoadingState() {
-  return <Card className="rounded-lg py-12 text-center shadow-none ring-[#d8e0e4]"><CardContent><RefreshCw className="mx-auto size-6 animate-spin text-[#0b737a]" /><p className="mt-3 text-sm font-medium text-[#163247]">Checking task, window, train-path and resource fixtures…</p><p className="mt-1 text-xs text-[#637483]">Hard safety constraints cannot be relaxed.</p></CardContent></Card>;
+  return (
+    <Card className="rounded-xl py-14 text-center shadow-none ring-[#d8e0e4]" aria-busy="true">
+      <CardContent>
+        <RefreshCw className="mx-auto size-7 text-[#0b737a] motion-safe:animate-spin" aria-hidden="true" />
+        <h2 className="mt-4 text-lg font-semibold text-[#163247]">Checking safe planning options</h2>
+        <p className="mt-1 text-sm text-[#526675]">Screening protected time, mandatory work and train paths.</p>
+      </CardContent>
+    </Card>
+  );
 }
 
-function EmptyRun({ onGenerate }: { onGenerate: () => void }) {
-  return <Card className="rounded-lg py-12 text-center shadow-none ring-[#d8e0e4]"><CardContent><Clock3 className="mx-auto size-6 text-[#0b737a]" /><h2 className="mt-3 text-base font-semibold text-[#163247]">Inputs changed</h2><p className="mx-auto mt-1 max-w-lg text-sm text-[#637483]">Generate a new fixture recommendation before reviewing or submitting this context.</p><Button className="mt-4" onClick={onGenerate}>Generate plans</Button></CardContent></Card>;
+function EmptyState() {
+  return (
+    <Card className="rounded-xl py-14 text-center shadow-none ring-[#d8e0e4]">
+      <CardContent>
+        <ListChecks className="mx-auto size-8 text-[#0b737a]" aria-hidden="true" />
+        <h2 className="mt-4 text-lg font-semibold text-[#163247]">Choose a date and test condition</h2>
+        <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-[#526675]">Generate one recommendation, then compare alternatives and adjust optional maintenance work.</p>
+      </CardContent>
+    </Card>
+  );
 }
 
-function BlockedRun() {
-  return <Card className="rounded-lg border-l-4 border-l-[#b4443f] py-0 shadow-none ring-[#e1c1bf]"><CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center"><AlertTriangle className="size-6 shrink-0 text-[#b4443f]" /><div className="flex-1"><h2 className="font-semibold text-[#7f3431]">Fail-closed: COA snapshot is stale</h2><p className="mt-1 text-sm leading-6 text-[#704e4c]">No new recommendation or manual approval shortcut is available. Refresh the synthetic source snapshot first.</p></div><Link href="/audit-data-health" className={buttonVariants({ variant: 'outline' })}>Open data health</Link></CardContent></Card>;
+function BlockedState() {
+  return (
+    <Card className="rounded-xl border border-[#efc8c5] bg-[#fff8f7] py-0 shadow-none ring-0">
+      <CardContent className="flex flex-col items-start gap-4 p-6 sm:flex-row sm:items-center">
+        <AlertTriangle className="size-7 shrink-0 text-[#a33f3a]" aria-hidden="true" />
+        <div className="flex-1"><h2 className="text-lg font-semibold text-[#6f302d]">Planning is safely blocked</h2><p className="mt-1 text-sm leading-6 text-[#7c4b48]">Refresh the synthetic Control Office snapshot before generating another recommendation.</p></div>
+        <Link href="/audit-data-health" className={cn(buttonVariants({ variant: 'outline' }), 'h-11 bg-white px-4')}>Open data health <ArrowRight /></Link>
+      </CardContent>
+    </Card>
+  );
 }
 
-function InfeasibleRun() {
-  return <Card className="rounded-lg border-l-4 border-l-[#b4443f] py-0 shadow-none ring-[#e1c1bf]"><CardContent className="p-5"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 size-5 shrink-0 text-[#b4443f]" /><div><h2 className="font-semibold text-[#7f3431]">No hard-feasible plan</h2><p className="mt-1 text-sm leading-6 text-[#704e4c]">Conflict set: mandatory E-17 needs 100 protected minutes including setup/handback; retained windows are 60 and 75 minutes, while the longer band is occupied by a protected train path.</p></div></div><div className="mt-4 grid gap-2 sm:grid-cols-2"><div className="rounded-md bg-[#fff7f5] p-3 text-xs text-[#704e4c]"><strong>Closest safe alternative:</strong> move planning date or release a verified 02:20–04:00 corridor window.</div><div className="rounded-md bg-[#fff7f5] p-3 text-xs text-[#704e4c]"><strong>Never suggested:</strong> shortening E-17 below prescribed P90 or relaxing train protection.</div></div></CardContent></Card>;
+function InfeasibleState() {
+  return (
+    <Card className="rounded-xl border border-[#e9c5c2] bg-white py-0 shadow-none ring-0">
+      <CardContent className="p-6">
+        <div className="flex items-start gap-3"><Info className="mt-0.5 size-6 shrink-0 text-[#a33f3a]" aria-hidden="true" /><div><h2 className="text-lg font-semibold text-[#163247]">No safe window in this test condition</h2><p className="mt-1 text-sm leading-6 text-[#526675]">The demo engine did not relax a hard railway constraint to force a result.</p></div></div>
+        <ul className="mt-5 grid gap-3 text-sm text-[#526675] md:grid-cols-3">
+          <li className="rounded-lg bg-[#f7f9fa] p-4"><strong className="block text-[#163247]">Mandatory work</strong><span className="mt-1 block">E-17 needs its full safety duration.</span></li>
+          <li className="rounded-lg bg-[#f7f9fa] p-4"><strong className="block text-[#163247]">Train paths</strong><span className="mt-1 block">Protected passenger paths cannot be displaced.</span></li>
+          <li className="rounded-lg bg-[#f7f9fa] p-4"><strong className="block text-[#163247]">Operating authority</strong><span className="mt-1 block">No manual override is available in this prototype.</span></li>
+        </ul>
+      </CardContent>
+    </Card>
+  );
 }

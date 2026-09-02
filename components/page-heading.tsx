@@ -20,10 +20,9 @@ export function PageHeading({
         <h1 className="text-2xl font-semibold tracking-[-0.025em] text-[#102a40] sm:text-[28px]">
           {title}
         </h1>
-        <p className="mt-1 max-w-3xl text-sm leading-6 text-[#637483]">{description}</p>
+        <p className="mt-1 max-w-3xl text-sm leading-6 text-[#526675]">{description}</p>
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
     </div>
   );
 }
-

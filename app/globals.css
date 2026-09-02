@@ -53,7 +53,7 @@ body {
 }
 
 :root {
-  --background: #f3f5f6;
+  --background: #f6f7f8;
   --foreground: #11283a;
   --card: #ffffff;
   --card-foreground: #11283a;
@@ -63,20 +63,20 @@ body {
   --primary-foreground: #ffffff;
   --secondary: #e8f2f4;
   --secondary-foreground: #075f69;
-  --muted: #f3f5f6;
-  --muted-foreground: #637483;
+  --muted: #f1f4f5;
+  --muted-foreground: #586b78;
   --accent: #fff0e2;
   --accent-foreground: #8e4613;
   --destructive: #b4443f;
-  --border: #d8e0e4;
-  --input: #cbd6db;
+  --border: #dce3e6;
+  --input: #c8d3d8;
   --ring: #0b737a;
   --chart-1: #0b737a;
   --chart-2: #f47a1f;
   --chart-3: #21835d;
   --chart-4: #526675;
   --chart-5: #9d403d;
-  --radius: 0.5rem;
+  --radius: 0.7rem;
   --sidebar: #ffffff;
   --sidebar-foreground: #11283a;
   --sidebar-primary: #0b6871;
@@ -135,5 +135,15 @@ body {
   a,
   select {
     -webkit-tap-highlight-color: transparent;
+  }
+  button:not(:disabled),
+  a[href],
+  select:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled {
+    cursor: not-allowed;
   }
 }

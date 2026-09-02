@@ -26,7 +26,7 @@ import {
   type Task,
 } from '@/lib/rail-data';
 
-const STORAGE_KEY = 'railsamanvay-prototype-v3';
+const STORAGE_KEY = 'railsamanvay-prototype-v4';
 
 type PrototypeState = {
   division: string;
@@ -189,7 +189,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }
 
   async function generatePlans(): Promise<'feasible' | 'infeasible' | 'blocked'> {
-    if (state.dataGate !== 'ready') {
+    if (state.dataGate !== 'ready' || !state.planningDate) {
       setState((previous) => ({
         ...previous,
         runStatus: 'blocked',
@@ -197,7 +197,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
           auditEvent(
             'Data quality gate',
             'Generation blocked',
-            'COA snapshot is stale. No recommendation was produced.',
+            previous.dataGate !== 'ready'
+              ? 'COA snapshot is stale. No recommendation was produced.'
+              : 'A planning date is required. No recommendation was produced.',
             previous.recommendationVersion,
           ),
           ...previous.auditEvents,
@@ -263,21 +265,24 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }
 
   function selectPlan(planId: PlanId) {
-    setState((previous) => ({
-      ...previous,
-      selectedPlanId: planId,
-      selectedTaskIds: includeMandatory(plans[planId].taskIds, previous.tasks),
-      draftDirty: false,
-      auditEvents: [
-        auditEvent(
-          'Demo Planner',
-          'Alternative inspected',
-          `Plan ${planId} selected for comparison.`,
-          previous.recommendationVersion,
-        ),
-        ...previous.auditEvents,
-      ],
-    }));
+    setState((previous) => {
+      if (previous.selectedPlanId === planId) return previous;
+      return {
+        ...previous,
+        selectedPlanId: planId,
+        selectedTaskIds: includeMandatory(plans[planId].taskIds, previous.tasks),
+        draftDirty: false,
+        auditEvents: [
+          auditEvent(
+            'Demo Planner',
+            'Alternative selected',
+            `Plan ${planId} selected; its fixture-supported task set replaced manual draft edits.`,
+            previous.recommendationVersion,
+          ),
+          ...previous.auditEvents,
+        ],
+      };
+    });
   }
 
   function toggleTask(taskId: string) {
@@ -306,25 +311,51 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
   async function revalidateDraft() {
     if (state.dataGate !== 'ready' || state.runStatus !== 'feasible') return false;
+    const selectedTasks = state.tasks.filter((task) =>
+      state.selectedTaskIds.includes(task.id),
+    );
+    const mandatoryMissing = state.tasks.some(
+      (task) => task.mandatory && !task.quarantined && !state.selectedTaskIds.includes(task.id),
+    );
+    const hasQuarantined = selectedTasks.some((task) => task.quarantined);
+    const exceedsFixtureCapacity = selectedTasks.length > 4;
+    const valid =
+      Boolean(selectedTasks.length) &&
+      !mandatoryMissing &&
+      !hasQuarantined &&
+      !exceedsFixtureCapacity;
     await new Promise((resolve) => window.setTimeout(resolve, 450));
-    setState((previous) => ({
-      ...previous,
-      draftDirty: false,
-      auditEvents: [
-        auditEvent(
-          'RailSamanvay demo engine',
-          'Draft revalidated',
-          `${previous.selectedTaskIds.length} selected tasks passed the deterministic fixture constraint check.`,
-          previous.recommendationVersion,
-        ),
-        ...previous.auditEvents,
-      ],
-    }));
-    return true;
+    setState((previous) => {
+      const detail = valid
+        ? `${selectedTasks.length} selected tasks passed the deterministic fixture constraint check.`
+        : exceedsFixtureCapacity
+          ? `${selectedTasks.length} tasks exceed this fixture's four-work-item coordination limit.`
+          : 'The draft is missing mandatory work or contains an ineligible source record.';
+      return {
+        ...previous,
+        draftDirty: !valid,
+        auditEvents: [
+          auditEvent(
+            'RailSamanvay demo engine',
+            valid ? 'Draft revalidated' : 'Draft validation failed',
+            detail,
+            previous.recommendationVersion,
+          ),
+          ...previous.auditEvents,
+        ],
+      };
+    });
+    return valid;
   }
 
   function submitForReview(note: string) {
-    if (state.runStatus !== 'feasible' || state.draftDirty) return null;
+    if (
+      state.runStatus !== 'feasible' ||
+      state.draftDirty ||
+      !state.planningDate ||
+      state.selectedTaskIds.length === 0 ||
+      state.selectedTaskIds.length > 4
+    ) return null;
     const mandatoryTasks = state.tasks.filter(
       (task) => task.mandatory && !task.quarantined,
     );
@@ -336,8 +367,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
     const version = state.recommendationVersion;
     const recommendationId = `RS-${sectionCode(state.section)}-${state.planningDate.replaceAll('-', '')}-V${version}`;
+    const signature = [...state.selectedTaskIds].sort().join('|');
     const existing = state.approvals.find(
-      (approval) => approval.recommendationId === recommendationId,
+      (approval) =>
+        approval.recommendationId === recommendationId &&
+        approval.planId === state.selectedPlanId &&
+        [...approval.selectedTaskIds].sort().join('|') === signature,
     );
     const approvalId = existing?.id ?? `APR-${String(state.approvals.length + 41).padStart(3, '0')}`;
     const submittedAt = new Date().toISOString();
@@ -405,7 +440,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         item.id === approvalId
           ? {
               ...item,
-              planId: selectedPlanId,
+              requestedPlanId: action === 'changes' ? selectedPlanId : undefined,
               status,
               officerReason: reason.trim() || 'Illustrative officer review completed.',
               decidedAt: new Date().toISOString(),
@@ -459,7 +494,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         { label: 'Network criticality', value: Math.round(input.priority * 0.25) },
       ],
       mandatory: input.mandatory,
-      quarantined: false,
+      quarantined: true,
+      quarantineReason: 'New demo records need confirmed worksite limits, protection and resources before planning.',
       source,
       sourceUpdatedAt: now,
       prescribedMinutes: 30,
@@ -472,7 +508,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resources: 'Demo team · ready',
       compatibility: 'Requires planner confirmation before grouping',
       dependency: 'None recorded',
-      confidence: 74,
+      confidence: 0,
     };
 
     setState((previous) => ({
@@ -493,22 +529,21 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }
 
   function setDataGate(gate: DataGate) {
+    if (gate !== 'stale') return;
     setState((previous) => ({
       ...previous,
-      dataGate: gate,
-      runStatus: gate === 'stale' ? 'blocked' : 'idle',
+      dataGate: 'stale',
+      runStatus: 'blocked',
       sources: previous.sources.map((source) =>
         source.id === 'COA'
-          ? { ...source, status: gate === 'stale' ? 'Stale' : 'Ready' }
+          ? { ...source, status: 'Stale' }
           : source,
       ),
       auditEvents: [
         auditEvent(
           'Data quality gate',
-          gate === 'stale' ? 'COA marked stale' : 'COA gate restored',
-          gate === 'stale'
-            ? 'New recommendations are blocked until the demo snapshot is refreshed.'
-            : 'COA demo snapshot is valid; a new run is required.',
+          'COA marked stale',
+          'New recommendations are blocked until the demo snapshot is refreshed.',
           previous.recommendationVersion,
         ),
         ...previous.auditEvents,
@@ -542,7 +577,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   function simulateReplan() {
     setState((previous) => {
       const version = previous.recommendationVersion + 1;
-      const nextPlan: PlanId = previous.selectedPlanId === 'A' ? 'B' : 'C';
+      const nextPlan: PlanId = 'B';
       return {
         ...previous,
         scenario: 'freight',

@@ -2,13 +2,13 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { ArrowRight, CheckCircle2 } from 'lucide-react';
+import { ArrowRight, CalendarRange, ChevronRight } from 'lucide-react';
 
 import { PageHeading } from '@/components/page-heading';
 import { RailShell } from '@/components/rail-shell';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Progress } from '@/components/ui/progress';
@@ -16,53 +16,60 @@ import { usePrototype } from '@/components/prototype-provider';
 import { cn } from '@/lib/utils';
 
 const weeks = [
-  { id: 1, label: '02–08 Sep', date: '2026-09-02', demand: 82, available: 180, requested: 148, risk: 'Balanced' },
-  { id: 2, label: '09–15 Sep', date: '2026-09-09', demand: 94, available: 170, requested: 160, risk: 'Tight' },
-  { id: 3, label: '16–22 Sep', date: '2026-09-16', demand: 68, available: 210, requested: 143, risk: 'Flexible' },
-  { id: 4, label: '23–29 Sep', date: '2026-09-23', demand: 76, available: 190, requested: 145, risk: 'Balanced' },
+  { id: 1, label: '02–08 Sep', date: '2026-09-02', available: 180, requested: 148 },
+  { id: 2, label: '09–15 Sep', date: '2026-09-09', available: 170, requested: 160 },
+  { id: 3, label: '16–22 Sep', date: '2026-09-16', available: 210, requested: 143 },
+  { id: 4, label: '23–29 Sep', date: '2026-09-23', available: 190, requested: 145 },
 ];
 
 const departments = [
-  { name: 'Engineering', tasks: 8, minutes: 285, critical: 2, color: 'bg-[#0b737a]' },
-  { name: 'Signal & Telecom', tasks: 5, minutes: 125, critical: 1, color: 'bg-[#f47a1f]' },
-  { name: 'Electrical — TRD', tasks: 4, minutes: 160, critical: 0, color: 'bg-[#405d86]' },
+  { name: 'Engineering', tasks: 8, minutes: 285, critical: 2 },
+  { name: 'Signal & Telecom', tasks: 5, minutes: 125, critical: 1 },
+  { name: 'Electrical — TRD', tasks: 4, minutes: 160, critical: 0 },
 ];
+
+type DemandMode = 'baseline' | 'high-freight' | 'reduced-teams';
+
+function adjustedAvailable(minutes: number, mode: DemandMode) {
+  if (mode === 'high-freight') return Math.max(0, minutes - 15);
+  if (mode === 'reduced-teams') return Math.max(0, minutes - 25);
+  return minutes;
+}
+
+function riskLabel(pressure: number) {
+  if (pressure >= 90) return 'Tight';
+  if (pressure >= 75) return 'Balanced';
+  return 'Flexible';
+}
 
 export default function MonthlyOutlookPage() {
   const { state, setPlanningField } = usePrototype();
   const [selectedWeek, setSelectedWeek] = useState(1);
-  const [demandMode, setDemandMode] = useState('baseline');
+  const [demandMode, setDemandMode] = useState<DemandMode>('baseline');
   const week = weeks.find((item) => item.id === selectedWeek) ?? weeks[0];
-  const pressure = demandMode === 'high-freight' ? 9 : demandMode === 'reduced-teams' ? 6 : 0;
+  const available = adjustedAvailable(week.available, demandMode);
+  const pressure = Math.min(100, Math.round((week.requested / available) * 100));
 
   return (
     <RailShell>
       <PageHeading
         eyebrow="Four-week capacity view"
         title="Monthly Outlook"
-        description="Spot weeks where cross-department maintenance demand is likely to exceed the protected corridor envelope."
-        action={<Badge className="rounded-md bg-[#e8f2f4] text-[#075f69]">September 2026 · synthetic</Badge>}
+        description="See which weeks need attention, then move one week into detailed block planning."
+        action={<Badge className="rounded-md bg-[#e8f2f4] text-[#075f69]">September 2026 · demo</Badge>}
       />
 
-      <Card className="mb-4 gap-0 rounded-lg py-0 shadow-none ring-[#d8e0e4]">
-        <CardContent className="grid gap-4 p-4 sm:grid-cols-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="outlook-division">Division</Label>
-            <NativeSelect id="outlook-division" className="w-full" value={state.division} onChange={(event) => setPlanningField('division', event.target.value)}>
-              <NativeSelectOption value="Secunderabad Division">Secunderabad Division</NativeSelectOption>
-              <NativeSelectOption value="Hyderabad Division">Hyderabad Division</NativeSelectOption>
-            </NativeSelect>
+      <Card className="mb-5 gap-0 rounded-xl py-0 shadow-none ring-[#d8e0e4]">
+        <CardContent className="flex flex-col justify-between gap-4 p-4 sm:flex-row sm:items-end">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#657682]">Planning corridor</p>
+            <p className="mt-1 text-sm font-semibold text-[#163247]">{state.division}</p>
+            <p className="mt-0.5 text-sm text-[#526675]">{state.section}</p>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="outlook-section">Section</Label>
-            <NativeSelect id="outlook-section" className="w-full" value={state.section} onChange={(event) => setPlanningField('section', event.target.value)}>
-              <NativeSelectOption value={state.section}>{state.section}</NativeSelectOption>
-            </NativeSelect>
-          </div>
-          <div className="space-y-1.5">
+          <div className="w-full space-y-1.5 sm:w-64">
             <Label htmlFor="demand-mode">Planning assumption</Label>
-            <NativeSelect id="demand-mode" className="w-full" value={demandMode} onChange={(event) => setDemandMode(event.target.value)}>
-              <NativeSelectOption value="baseline">Baseline demand</NativeSelectOption>
+            <NativeSelect id="demand-mode" className="w-full [&_select]:h-11" value={demandMode} onChange={(event) => setDemandMode(event.target.value as DemandMode)}>
+              <NativeSelectOption value="baseline">Baseline capacity</NativeSelectOption>
               <NativeSelectOption value="high-freight">Higher freight pressure</NativeSelectOption>
               <NativeSelectOption value="reduced-teams">Reduced team availability</NativeSelectOption>
             </NativeSelect>
@@ -70,15 +77,16 @@ export default function MonthlyOutlookPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
-        <Card className="gap-0 rounded-lg py-0 shadow-none ring-[#d8e0e4]">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+        <Card className="gap-0 rounded-xl py-0 shadow-none ring-[#d8e0e4]">
           <CardHeader className="border-b border-[#e4e9eb] px-5 py-4">
-            <CardTitle className="text-[15px] font-semibold text-[#163247]">Weekly capacity pressure</CardTitle>
-            <CardDescription className="mt-1 text-xs">Select a week to inspect its illustrative maintenance envelope.</CardDescription>
+            <h2 className="text-base font-semibold text-[#163247]">Weekly capacity pressure</h2>
+            <p className="text-sm text-[#657682]">Select a week to inspect its available protected time.</p>
           </CardHeader>
-          <CardContent className="grid gap-3 p-5 sm:grid-cols-2">
+          <CardContent className="divide-y divide-[#e4e9eb] px-0 py-0">
             {weeks.map((item) => {
-              const demand = Math.min(100, item.demand + pressure);
+              const itemAvailable = adjustedAvailable(item.available, demandMode);
+              const itemPressure = Math.min(100, Math.round((item.requested / itemAvailable) * 100));
               const active = item.id === selectedWeek;
               return (
                 <button
@@ -87,61 +95,77 @@ export default function MonthlyOutlookPage() {
                   aria-pressed={active}
                   onClick={() => setSelectedWeek(item.id)}
                   className={cn(
-                    'rounded-lg border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#0b737a]/25',
-                    active ? 'border-[#0b737a] bg-[#eef7f7]' : 'border-[#d8e0e4] bg-white hover:bg-[#f6f8f9]',
+                    'grid min-h-24 w-full gap-3 px-5 py-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[#0b737a]/25 sm:grid-cols-[150px_minmax(0,1fr)_90px_24px] sm:items-center',
+                    active ? 'bg-[#eef7f7]' : 'hover:bg-[#f7f9fa]',
                   )}
                 >
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-semibold text-[#163247]">Week {item.id} · {item.label}</span>
-                    <span className={cn('text-xs font-semibold', demand >= 90 ? 'text-[#9d403d]' : 'text-[#246c50]')}>{demand}%</span>
+                  <span>
+                    <span className="block text-sm font-semibold text-[#163247]">Week {item.id}</span>
+                    <span className="mt-1 block text-xs text-[#657682]">{item.label}</span>
                   </span>
-                  <Progress value={demand} aria-label={`Week ${item.id} demand pressure`} className={cn('mt-3 [&_[data-slot=progress-indicator]]:h-2 [&_[data-slot=progress-track]]:h-2', demand >= 90 && '[&_[data-slot=progress-indicator]]:bg-[#b4443f]')} />
-                  <span className="mt-2 flex justify-between text-xs text-[#637483]"><span>{item.requested + pressure} min requested</span><span>{item.risk}</span></span>
+                  <span>
+                    <Progress value={itemPressure} aria-label={`Week ${item.id} capacity pressure ${itemPressure} percent`} className={cn('[&_[data-slot=progress-indicator]]:h-2 [&_[data-slot=progress-track]]:h-2', itemPressure >= 90 && '[&_[data-slot=progress-indicator]]:bg-[#b4443f]')} />
+                    <span className="mt-2 flex justify-between gap-2 text-xs text-[#657682]"><span>{item.requested} requested</span><span>{itemAvailable} available</span></span>
+                  </span>
+                  <span className={cn('text-sm font-semibold', itemPressure >= 90 ? 'text-[#9d403d]' : 'text-[#246c50]')}>{itemPressure}%<span className="block text-xs font-normal">{riskLabel(itemPressure)}</span></span>
+                  <ChevronRight className="size-5 text-[#0b737a]" aria-hidden="true" />
                 </button>
               );
             })}
           </CardContent>
         </Card>
 
-        <Card className="gap-0 rounded-lg border-t-[3px] border-t-[#0b737a] py-0 shadow-none ring-[#cddbdd]">
-          <CardHeader className="border-b border-[#e4e9eb] px-5 py-4">
-            <div className="flex items-center gap-2 text-xs font-medium text-[#246c50]"><CheckCircle2 className="size-4" />Selected envelope</div>
-            <CardTitle className="mt-2 text-xl font-semibold text-[#163247]">Week {week.id} · {week.label}</CardTitle>
-            <CardDescription>{state.section}</CardDescription>
+        <Card className="gap-0 rounded-xl border-t-4 border-t-[#0b737a] py-0 shadow-[0_12px_34px_rgba(16,42,64,0.07)] ring-[#cddbdd]">
+          <CardHeader className="border-b border-[#e4e9eb] px-5 py-5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#075f69]"><CalendarRange className="size-4" />Selected planning week</div>
+            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.02em] text-[#163247]">Week {week.id} · {week.label}</h2>
+            <p className="text-sm text-[#657682]">{state.section}</p>
           </CardHeader>
-          <CardContent className="space-y-4 p-5">
-            <div className="grid grid-cols-2 gap-2">
-              <Metric label="Available" value={`${week.available} min`} />
-              <Metric label="Requested" value={`${week.requested + pressure} min`} />
+          <CardContent className="space-y-5 p-5">
+            <div className="grid grid-cols-3 gap-2">
+              <Metric label="Pressure" value={`${pressure}%`} />
+              <Metric label="Requested" value={`${week.requested} min`} />
+              <Metric label="Available" value={`${available} min`} />
             </div>
-            <div className="rounded-md bg-[#f6f8f9] p-3 text-xs leading-5 text-[#526675]">
-              Use the weekly workspace to evaluate exact train paths, protected windows and hard constraints. Monthly values are indicative envelopes only.
+            <div className={cn('rounded-xl p-4 text-sm leading-6', pressure >= 90 ? 'bg-[#fff3f2] text-[#7c3d39]' : 'bg-[#f2f7f5] text-[#365c4b]')}>
+              <strong>{riskLabel(pressure)} week.</strong>{' '}
+              {pressure >= 90
+                ? 'Detailed path and resource checks are especially important before committing work.'
+                : 'The indicative envelope leaves room for detailed constraint screening.'}
             </div>
+            <p className="text-sm leading-6 text-[#526675]">Weekly Plan will open with this date and test condition. Generate there to check exact train paths, protection and work compatibility.</p>
             <Link
               href="/weekly-plan"
               onClick={() => {
                 setPlanningField('planningDate', week.date);
-                setPlanningField('scenario', demandMode === 'high-freight' ? 'freight' : demandMode === 'reduced-teams' ? 'team-unavailable' : 'base');
+                setPlanningField(
+                  'scenario',
+                  demandMode === 'high-freight'
+                    ? 'freight'
+                    : demandMode === 'reduced-teams'
+                      ? 'team-unavailable'
+                      : 'base',
+                );
               }}
-              className={cn(buttonVariants({ variant: 'default' }), 'w-full bg-[#0b6871] text-white')}
+              className={cn(buttonVariants({ variant: 'default' }), 'h-11 w-full bg-[#0b6871] px-4 text-white hover:bg-[#075860]')}
             >
-              Open in Weekly Plan <ArrowRight className="size-4" />
+              Plan this week <ArrowRight />
             </Link>
           </CardContent>
         </Card>
       </div>
 
-      <Card className="mt-4 gap-0 rounded-lg py-0 shadow-none ring-[#d8e0e4]">
+      <Card className="mt-5 gap-0 rounded-xl py-0 shadow-none ring-[#d8e0e4]">
         <CardHeader className="border-b border-[#e4e9eb] px-5 py-4">
-          <CardTitle className="text-[15px] font-semibold text-[#163247]">Department demand</CardTitle>
-          <CardDescription className="mt-1 text-xs">Aggregated synthetic work for the selected month.</CardDescription>
+          <h2 className="text-base font-semibold text-[#163247]">Department demand</h2>
+          <p className="text-sm text-[#657682]">Synthetic work entering the September planning horizon.</p>
         </CardHeader>
-        <CardContent className="divide-y divide-[#e4e9eb] px-5 py-0">
+        <CardContent className="grid gap-3 p-5 md:grid-cols-3">
           {departments.map((department) => (
-            <div key={department.name} className="grid gap-3 py-4 sm:grid-cols-[190px_1fr_auto] sm:items-center">
-              <div><p className="text-sm font-medium text-[#163247]">{department.name}</p><p className="mt-0.5 text-xs text-[#637483]">{department.tasks} tasks · {department.critical} critical</p></div>
-              <Progress value={Math.round((department.minutes / 300) * 100)} aria-label={`${department.name} demand ${department.minutes} minutes`} className={cn('[&_[data-slot=progress-indicator]]:h-2 [&_[data-slot=progress-track]]:h-2', department.color === 'bg-[#f47a1f]' ? '[&_[data-slot=progress-indicator]]:bg-[#f47a1f]' : department.color === 'bg-[#405d86]' ? '[&_[data-slot=progress-indicator]]:bg-[#405d86]' : '')} />
-              <span className="text-sm font-semibold tabular-nums text-[#344b5d]">{department.minutes} min</span>
+            <div key={department.name} className="rounded-xl bg-[#f4f6f7] p-4">
+              <p className="text-sm font-semibold text-[#163247]">{department.name}</p>
+              <p className="mt-3 text-2xl font-semibold tabular-nums text-[#102a40]">{department.minutes} min</p>
+              <p className="mt-1 text-xs text-[#657682]">{department.tasks} tasks · {department.critical} critical</p>
             </div>
           ))}
         </CardContent>
@@ -151,5 +175,5 @@ export default function MonthlyOutlookPage() {
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-md bg-[#f5f7f8] p-3"><p className="text-[11px] uppercase tracking-[0.08em] text-[#637483]">{label}</p><p className="mt-1 text-lg font-semibold text-[#163247]">{value}</p></div>;
+  return <div className="rounded-lg bg-[#f2f5f6] p-3"><p className="text-xs text-[#657682]">{label}</p><p className="mt-1 text-base font-semibold tabular-nums text-[#163247]">{value}</p></div>;
 }

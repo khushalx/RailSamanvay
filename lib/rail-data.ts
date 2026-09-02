@@ -87,6 +87,7 @@ export type Approval = {
   submittedAt: string;
   note: string;
   status: ApprovalStatus;
+  requestedPlanId?: PlanId;
   officerReason?: string;
   decidedAt?: string;
 };
@@ -485,4 +486,3 @@ export const initialAuditEvents: AuditEvent[] = [
     detail: 'Secunderabad Division · Section A–B · 02 Sep 2026.',
   },
 ];
-
