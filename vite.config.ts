@@ -34,12 +34,24 @@ const localBindingConfig = {
     : [],
 };
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ mode }) => {
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= 'false';
   process.env.WRANGLER_LOG_PATH ??= '.wrangler/logs';
   process.env.MINIFLARE_REGISTRY_PATH ??= '.wrangler/registry';
+
+  const isVercelBuild = mode === 'vercel' || process.env.VERCEL === '1';
+
+  if (isVercelBuild) {
+    process.env.NITRO_PRESET ??= 'vercel';
+    const { nitro } = await import('nitro/vite');
+    const { default: tailwindcssVite } = await import('@tailwindcss/vite');
+
+    return {
+      plugins: [tailwindcssVite(), vinext(), nitro()],
+    };
+  }
 
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import('@cloudflare/vite-plugin');
