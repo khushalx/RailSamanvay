@@ -49,6 +49,7 @@ import { usePrototype } from '@/components/prototype-provider';
 import { formatPlanningDate, formatTimestamp } from '@/lib/format';
 import {
   candidateWindows,
+  evaluateDraft,
   plans,
   scenarioLabels,
   type PlanId,
@@ -79,6 +80,12 @@ export function WeeklyPlanPage() {
   const submitLock = useRef(false);
 
   const plan = plans[state.selectedPlanId];
+  const draftEvaluation = evaluateDraft(
+    state.selectedPlanId,
+    state.selectedTaskIds,
+    state.tasks,
+    state.scenario,
+  );
   const selectedTasks = state.tasks.filter((task) =>
     state.selectedTaskIds.includes(task.id),
   );
@@ -127,9 +134,7 @@ export function WeeklyPlanPage() {
     setNotice(
       valid
         ? 'The edited task set passed the demo hard-constraint check.'
-        : state.selectedTaskIds.length > 4
-          ? 'This fixture supports at most four coordinated tasks. Remove a task and try again.'
-          : 'The task set is missing mandatory work or includes an ineligible record.',
+        : draftEvaluation.issues[0] ?? 'The edited task set does not fit this plan.',
     );
   }
 
@@ -279,9 +284,9 @@ export function WeeklyPlanPage() {
             <CardContent className="space-y-6 p-5 sm:p-6">
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <Metric label="Protected time" value={`${plan.protectedMinutes} min`} />
-                <Metric label="Expected delay" value={`${plan.impactMinutes} min`} />
-                <Metric label="Safety duration" value={`${plan.p90Minutes} min`} />
-                <Metric label="Capacity used" value={`${plan.utilization}%`} />
+                <Metric label="Expected delay" value={`${draftEvaluation.impactMinutes} min`} />
+                <Metric label="Safety duration" value={`${draftEvaluation.safetyMinutes} min`} />
+                <Metric label="Capacity used" value={`${draftEvaluation.utilization}%`} />
               </div>
 
               <fieldset>
@@ -289,11 +294,24 @@ export function WeeklyPlanPage() {
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
                   {(Object.values(plans) as Array<(typeof plans)[PlanId]>).map((alternative) => {
                     const active = alternative.id === state.selectedPlanId;
+                    const alternativeEvaluation = evaluateDraft(
+                      alternative.id,
+                      alternative.taskIds,
+                      state.tasks,
+                      state.scenario,
+                    );
+                    const shownEvaluation = active
+                      ? draftEvaluation
+                      : alternativeEvaluation;
+                    const shownTaskCount = active
+                      ? state.selectedTaskIds.length
+                      : alternative.taskIds.length;
                     return (
                       <button
                         key={alternative.id}
                         type="button"
                         aria-pressed={active}
+                        disabled={!active && !alternativeEvaluation.valid}
                         onClick={() => {
                           selectPlan(alternative.id);
                           setNotice('');
@@ -302,7 +320,9 @@ export function WeeklyPlanPage() {
                           'min-h-28 rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#0b737a]/25',
                           active
                             ? 'border-[#0b737a] bg-[#eef7f7]'
-                            : 'border-[#d8e0e4] bg-white hover:border-[#afc2c9] hover:bg-[#f7f9fa]',
+                            : alternativeEvaluation.valid
+                              ? 'border-[#d8e0e4] bg-white hover:border-[#afc2c9] hover:bg-[#f7f9fa]'
+                              : 'border-[#e1e5e7] bg-[#f5f6f7] opacity-65',
                         )}
                       >
                         <span className="flex items-center justify-between gap-2">
@@ -311,7 +331,9 @@ export function WeeklyPlanPage() {
                         </span>
                         <span className="mt-2 block text-base font-semibold text-[#102a40]">{alternative.window}</span>
                         <span className="mt-1 block text-xs leading-5 text-[#526675]">
-                          {alternative.impactMinutes} min expected delay · {alternative.taskIds.length} tasks
+                          {shownEvaluation.valid
+                            ? `${shownEvaluation.impactMinutes} min expected delay · ${shownTaskCount} tasks`
+                            : shownEvaluation.issues[0]}
                         </span>
                       </button>
                     );
@@ -331,12 +353,15 @@ export function WeeklyPlanPage() {
                 <div className="mt-3 divide-y divide-[#e4e9eb] overflow-hidden rounded-xl border border-[#d8e0e4] bg-white">
                   {eligibleTasks.map((task) => {
                     const checked = state.selectedTaskIds.includes(task.id);
+                    const unavailableForScenario =
+                      state.scenario === 'team-unavailable' &&
+                      task.department === 'Electrical — TRD';
                     return (
                       <div key={task.id} className="flex min-h-16 items-center gap-3 px-4 py-3">
                         <Checkbox
                           id={`plan-task-${task.id}`}
                           checked={checked}
-                          disabled={task.mandatory || validating}
+                          disabled={task.mandatory || validating || unavailableForScenario}
                           aria-label={`${checked ? 'Remove' : 'Add'} ${task.id} ${task.title}`}
                           onCheckedChange={() => toggleTask(task.id)}
                         />
@@ -345,6 +370,7 @@ export function WeeklyPlanPage() {
                             <span className="font-mono text-xs font-semibold text-[#0b737a]">{task.id}</span>
                             <span className="text-sm font-medium text-[#163247]">{task.title}</span>
                             {task.mandatory ? <Badge className="rounded-md bg-[#fff0e2] text-[#91450f]">Mandatory</Badge> : null}
+                            {unavailableForScenario ? <Badge className="rounded-md bg-[#fff0ef] text-[#9d403d]">Team unavailable</Badge> : null}
                           </span>
                           <span className="mt-1 block text-xs text-[#657682]">{task.department} · safety duration {task.p90Minutes} min</span>
                         </label>
@@ -362,9 +388,9 @@ export function WeeklyPlanPage() {
                   <div>
                     <p className="text-sm font-semibold text-[#75431d]">Revalidation required</p>
                     <p className="mt-1 text-sm text-[#7b5a3c]">
-                      {state.selectedTaskIds.length > 4
-                        ? 'This fixture can coordinate at most four work items.'
-                        : 'The selected work changed after the recommendation was generated.'}
+                      {draftEvaluation.valid
+                        ? 'The selected work changed after the recommendation was generated.'
+                        : draftEvaluation.issues[0]}
                     </p>
                   </div>
                   <Button variant="outline" className="h-11 bg-white" disabled={validating} onClick={handleRevalidate}>
@@ -377,7 +403,13 @@ export function WeeklyPlanPage() {
               <div className="flex flex-col gap-3 border-t border-[#e4e9eb] pt-5 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-sm font-semibold text-[#163247]">
-                    {currentApproval ? 'This exact draft already has an approval record.' : 'Ready for Control Officer review'}
+                    {currentApproval
+                      ? 'This exact draft already has an approval record.'
+                      : !draftEvaluation.valid
+                        ? 'Resolve the constraint conflict before review'
+                        : state.draftDirty
+                          ? 'Revalidate the edited work before review'
+                          : 'Ready for Control Officer review'}
                   </p>
                   <p className="mt-1 text-xs text-[#657682]">Prototype only · no traffic or power block is issued</p>
                 </div>
@@ -391,7 +423,7 @@ export function WeeklyPlanPage() {
                 ) : (
                   <Button
                     className="h-11 bg-[#0b6871] px-4 text-white hover:bg-[#075860]"
-                    disabled={state.draftDirty || state.dataGate !== 'ready'}
+                    disabled={state.draftDirty || state.dataGate !== 'ready' || !draftEvaluation.valid}
                     onClick={() => setReviewOpen(true)}
                   >
                     <Send /> Review and send
@@ -439,7 +471,7 @@ export function WeeklyPlanPage() {
                         </li>
                       ))}
                     </ol>
-                    <p className="mt-3 text-sm text-[#526675]">Expected train delay is {plan.impactMinutes} minutes. Actual execution remains subject to Railway operating authority and field confirmation.</p>
+                    <p className="mt-3 text-sm text-[#526675]">Expected train delay is {draftEvaluation.impactMinutes} minutes. Actual execution remains subject to Railway operating authority and field confirmation.</p>
                   </AccordionContent>
                 </AccordionItem>
                 <AccordionItem value="safety">
@@ -470,7 +502,7 @@ export function WeeklyPlanPage() {
           </DialogHeader>
           <div className="rounded-xl border border-[#d8e0e4] bg-[#f7f9fa] p-4">
             <p className="text-sm font-semibold text-[#163247]">{state.section} · {plan.window}</p>
-            <p className="mt-1 text-sm text-[#526675]">{selectedTasks.length} tasks · {plan.impactMinutes} min expected delay · version {state.recommendationVersion}</p>
+            <p className="mt-1 text-sm text-[#526675]">{selectedTasks.length} tasks · {draftEvaluation.impactMinutes} min expected delay · version {state.recommendationVersion}</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="planner-note">Planner note (optional)</Label>

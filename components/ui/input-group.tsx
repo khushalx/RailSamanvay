@@ -1,5 +1,7 @@
 'use client';
 
+/* oxlint-disable jsx-a11y/prefer-tag-over-role */
+
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 
@@ -49,6 +51,9 @@ function InputGroupAddon({
   ...props
 }: React.ComponentProps<'div'> & VariantProps<typeof inputGroupAddonVariants>) {
   return (
+    // This container intentionally focuses its sibling input when its empty
+    // surface is clicked; nested buttons retain their native interaction.
+    // oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
     <div
       role="group"
       data-slot="input-group-addon"

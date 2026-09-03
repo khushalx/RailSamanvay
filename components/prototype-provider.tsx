@@ -13,6 +13,7 @@ import {
   initialAuditEvents,
   initialSources,
   initialTasks,
+  evaluateDraft,
   plans,
   sectionsByDivision,
   type Approval,
@@ -267,10 +268,18 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   function selectPlan(planId: PlanId) {
     setState((previous) => {
       if (previous.selectedPlanId === planId) return previous;
+      const nextTaskIds = includeMandatory(plans[planId].taskIds, previous.tasks);
+      const evaluation = evaluateDraft(
+        planId,
+        nextTaskIds,
+        previous.tasks,
+        previous.scenario,
+      );
+      if (!evaluation.valid) return previous;
       return {
         ...previous,
         selectedPlanId: planId,
-        selectedTaskIds: includeMandatory(plans[planId].taskIds, previous.tasks),
+        selectedTaskIds: nextTaskIds,
         draftDirty: false,
         auditEvents: [
           auditEvent(
@@ -311,26 +320,18 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
   async function revalidateDraft() {
     if (state.dataGate !== 'ready' || state.runStatus !== 'feasible') return false;
-    const selectedTasks = state.tasks.filter((task) =>
-      state.selectedTaskIds.includes(task.id),
+    const evaluation = evaluateDraft(
+      state.selectedPlanId,
+      state.selectedTaskIds,
+      state.tasks,
+      state.scenario,
     );
-    const mandatoryMissing = state.tasks.some(
-      (task) => task.mandatory && !task.quarantined && !state.selectedTaskIds.includes(task.id),
-    );
-    const hasQuarantined = selectedTasks.some((task) => task.quarantined);
-    const exceedsFixtureCapacity = selectedTasks.length > 4;
-    const valid =
-      Boolean(selectedTasks.length) &&
-      !mandatoryMissing &&
-      !hasQuarantined &&
-      !exceedsFixtureCapacity;
+    const valid = evaluation.valid;
     await new Promise((resolve) => window.setTimeout(resolve, 450));
     setState((previous) => {
       const detail = valid
-        ? `${selectedTasks.length} selected tasks passed the deterministic fixture constraint check.`
-        : exceedsFixtureCapacity
-          ? `${selectedTasks.length} tasks exceed this fixture's four-work-item coordination limit.`
-          : 'The draft is missing mandatory work or contains an ineligible source record.';
+        ? `${state.selectedTaskIds.length} selected tasks passed the deterministic fixture constraint check at ${evaluation.safetyMinutes} safety minutes.`
+        : evaluation.issues.join(' ');
       return {
         ...previous,
         draftDirty: !valid,
@@ -349,12 +350,17 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }
 
   function submitForReview(note: string) {
+    const evaluation = evaluateDraft(
+      state.selectedPlanId,
+      state.selectedTaskIds,
+      state.tasks,
+      state.scenario,
+    );
     if (
       state.runStatus !== 'feasible' ||
       state.draftDirty ||
       !state.planningDate ||
-      state.selectedTaskIds.length === 0 ||
-      state.selectedTaskIds.length > 4
+      !evaluation.valid
     ) return null;
     const mandatoryTasks = state.tasks.filter(
       (task) => task.mandatory && !task.quarantined,

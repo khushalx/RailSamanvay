@@ -1,5 +1,7 @@
 'use client';
 
+/* oxlint-disable jsx-a11y/prefer-tag-over-role */
+
 import { useMemo } from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 

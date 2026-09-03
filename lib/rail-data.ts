@@ -388,6 +388,105 @@ export const plans: Record<PlanId, Plan> = {
   },
 };
 
+export type DraftEvaluation = {
+  valid: boolean;
+  issues: string[];
+  safetyMinutes: number;
+  impactMinutes: number;
+  utilization: number;
+};
+
+export function evaluateDraft(
+  planId: PlanId,
+  selectedTaskIds: string[],
+  tasks: Task[],
+  scenario: PlanningScenario,
+): DraftEvaluation {
+  const plan = plans[planId];
+  const selectedTasks = tasks.filter((task) => selectedTaskIds.includes(task.id));
+  const selectedIds = new Set(selectedTaskIds);
+  const baselineIds = new Set(plan.taskIds);
+  const missingRecords = selectedTaskIds.filter(
+    (taskId) => !tasks.some((task) => task.id === taskId),
+  );
+  const removedBaseline = tasks.filter(
+    (task) => baselineIds.has(task.id) && !selectedIds.has(task.id),
+  );
+  const addedTasks = selectedTasks.filter((task) => !baselineIds.has(task.id));
+
+  let safetyMinutes = selectedTasks.length ? plan.p90Minutes : 0;
+  safetyMinutes -= removedBaseline.reduce(
+    (total, task) => total + Math.ceil(task.p90Minutes * 0.25),
+    0,
+  );
+  safetyMinutes += addedTasks.reduce(
+    (total, task) => total + Math.ceil(task.p90Minutes * 0.5),
+    0,
+  );
+  safetyMinutes = Math.max(
+    selectedTasks.length ? Math.max(...selectedTasks.map((task) => task.p90Minutes)) : 0,
+    safetyMinutes,
+  );
+
+  const impactMinutes = Math.max(
+    0,
+    plan.impactMinutes + addedTasks.length * 2 - removedBaseline.length,
+  );
+  const utilization = plan.protectedMinutes
+    ? Math.round((safetyMinutes / plan.protectedMinutes) * 100)
+    : 0;
+  const issues: string[] = [];
+
+  if (!selectedTasks.length) issues.push('Select at least one maintenance task.');
+  if (missingRecords.length) issues.push('One or more selected task records are unavailable.');
+  if (
+    tasks.some(
+      (task) => task.mandatory && !task.quarantined && !selectedIds.has(task.id),
+    )
+  ) {
+    issues.push('Mandatory safety work cannot be removed.');
+  }
+  if (selectedTasks.some((task) => task.quarantined)) {
+    issues.push('Quarantined source records cannot enter a recommendation.');
+  }
+  if (selectedTasks.length > 4) {
+    issues.push("This fixture supports at most four coordinated work items.");
+  }
+  if (
+    selectedTasks.some((task) => /unavailable|unverified/i.test(task.resources))
+  ) {
+    issues.push('A selected work team is not confirmed as available.');
+  }
+  if (
+    scenario === 'team-unavailable' &&
+    selectedTasks.some((task) => task.department === 'Electrical — TRD')
+  ) {
+    issues.push('TRD work cannot be scheduled while the TRD team is unavailable.');
+  }
+  if (scenario === 'freight' && planId === 'A') {
+    issues.push('Plan A conflicts with the materialised freight path.');
+  }
+  if (
+    planId === 'C' &&
+    selectedTasks.some((task) => task.department === 'Electrical — TRD')
+  ) {
+    issues.push('Plan C does not include the power-isolation allowance required for TRD work.');
+  }
+  if (safetyMinutes > plan.protectedMinutes) {
+    issues.push(
+      `The ${safetyMinutes}-minute safety duration exceeds the ${plan.protectedMinutes}-minute protected window.`,
+    );
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues: Array.from(new Set(issues)),
+    safetyMinutes,
+    impactMinutes,
+    utilization,
+  };
+}
+
 export const candidateWindows: CandidateWindow[] = [
   {
     id: 'early',

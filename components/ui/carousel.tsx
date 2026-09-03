@@ -1,5 +1,7 @@
 'use client';
 
+/* oxlint-disable jsx-a11y/prefer-tag-over-role */
+
 import * as React from 'react';
 import useEmblaCarousel, {
   type UseEmblaCarouselType,
@@ -95,11 +97,13 @@ function Carousel({
 
   React.useEffect(() => {
     if (!api) return;
-    onSelect(api);
+    const frame = window.requestAnimationFrame(() => onSelect(api));
     api.on('reInit', onSelect);
     api.on('select', onSelect);
 
     return () => {
+      window.cancelAnimationFrame(frame);
+      api.off('reInit', onSelect);
       api?.off('select', onSelect);
     };
   }, [api, onSelect]);

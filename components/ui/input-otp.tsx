@@ -1,5 +1,7 @@
 'use client';
 
+/* oxlint-disable jsx-a11y/prefer-tag-over-role */
+
 import * as React from 'react';
 import { OTPInput, OTPInputContext } from 'input-otp';
 
