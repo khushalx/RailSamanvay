@@ -64,6 +64,7 @@ type PrototypeContextValue = {
     field: 'division' | 'section' | 'planningDate' | 'scenario',
     value: string,
   ) => void;
+  setPlanningWeek: (date: string, scenario: PlanningScenario) => void;
   generatePlans: () => Promise<'feasible' | 'infeasible' | 'blocked'>;
   selectPlan: (planId: PlanId) => void;
   toggleTask: (taskId: string) => void;
@@ -165,7 +166,11 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (hydrated) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch {
+        // The prototype remains usable when browser storage is unavailable.
+      }
     }
   }, [hydrated, state]);
 
@@ -187,6 +192,24 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         runStatus: 'idle',
       };
     });
+  }
+
+  function setPlanningWeek(date: string, scenario: PlanningScenario) {
+    const nextState: PrototypeState = {
+      ...state,
+      planningDate: date,
+      scenario,
+      runStatus: 'idle',
+    };
+
+    // A planning-week link performs a full-page navigation on Vercel. Persist
+    // the chosen inputs synchronously so the destination always receives them.
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+    } catch {
+      // The destination will fall back to its default planning inputs.
+    }
+    setState(nextState);
   }
 
   async function generatePlans(): Promise<'feasible' | 'infeasible' | 'blocked'> {
@@ -616,6 +639,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     hydrated,
     pendingCount,
     setPlanningField,
+    setPlanningWeek,
     generatePlans,
     selectPlan,
     toggleTask,

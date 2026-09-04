@@ -34,6 +34,31 @@ const localBindingConfig = {
     : [],
 };
 
+// Vinext beta.5 can split its client router shims into an invalid cyclic chunk
+// graph. Keeping them together restores Link prefetching and route transitions.
+const vinextShimsSingleChunk = {
+  name: 'vinext-shims-single-chunk',
+  configEnvironment(name: string) {
+    if (name !== 'client') return;
+    return {
+      build: {
+        rolldownOptions: {
+          output: {
+            codeSplitting: {
+              groups: [
+                {
+                  name: 'vinext-shims',
+                  test: /[\\/]node_modules[\\/]vinext[\\/]dist[\\/]shims[\\/]/,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+  },
+};
+
 export default defineConfig(async ({ mode }) => {
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
@@ -49,7 +74,7 @@ export default defineConfig(async ({ mode }) => {
     const { default: tailwindcssVite } = await import('@tailwindcss/vite');
 
     return {
-      plugins: [tailwindcssVite(), vinext(), nitro()],
+      plugins: [tailwindcssVite(), vinext(), vinextShimsSingleChunk, nitro()],
     };
   }
 
@@ -63,6 +88,7 @@ export default defineConfig(async ({ mode }) => {
       : undefined,
     plugins: [
       vinext(),
+      vinextShimsSingleChunk,
       sites(),
       cloudflare({
         viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },

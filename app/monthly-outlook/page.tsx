@@ -43,7 +43,7 @@ function riskLabel(pressure: number) {
 }
 
 export default function MonthlyOutlookPage() {
-  const { state, setPlanningField } = usePrototype();
+  const { state, setPlanningWeek } = usePrototype();
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [demandMode, setDemandMode] = useState<DemandMode>('baseline');
   const week = weeks.find((item) => item.id === selectedWeek) ?? weeks[0];
@@ -137,9 +137,8 @@ export default function MonthlyOutlookPage() {
             <Link
               href="/weekly-plan"
               onClick={() => {
-                setPlanningField('planningDate', week.date);
-                setPlanningField(
-                  'scenario',
+                setPlanningWeek(
+                  week.date,
                   demandMode === 'high-freight'
                     ? 'freight'
                     : demandMode === 'reduced-teams'
