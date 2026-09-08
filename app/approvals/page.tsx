@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   CheckCircle2,
   ChevronRight,
@@ -71,8 +71,10 @@ export default function ApprovalsPage() {
   const [reason, setReason] = useState('');
   const [alternatePlan, setAlternatePlan] = useState<PlanId>(firstAlternative(firstPending));
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [decisionBusy, setDecisionBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const decisionLock = useRef(false);
   const queryIsActive = Boolean(requestedApproval && !queryDismissed && !selectedId);
   const activeFilter: QueueFilter = queryIsActive ? 'All' : filter;
 
@@ -126,7 +128,9 @@ export default function ApprovalsPage() {
   }
 
   function confirmDecision() {
-    if (!selectedApproval || !decisionAction) return;
+    if (!selectedApproval || !decisionAction || decisionLock.current) return;
+    decisionLock.current = true;
+    setDecisionBusy(true);
     const success = decideApproval(
       selectedApproval.id,
       decisionAction,
@@ -136,6 +140,10 @@ export default function ApprovalsPage() {
     setConfirmOpen(false);
     if (!success) {
       setError('This request is no longer pending or the decision is incomplete.');
+      window.setTimeout(() => {
+        decisionLock.current = false;
+        setDecisionBusy(false);
+      }, 250);
       return;
     }
     setFilter('All');
@@ -150,6 +158,10 @@ export default function ApprovalsPage() {
           : `${selectedApproval.id} was rejected with the recorded reason.`,
     );
     setDecisionAction(null);
+    window.setTimeout(() => {
+      decisionLock.current = false;
+      setDecisionBusy(false);
+    }, 250);
   }
 
   const confirmationTitle =
@@ -289,8 +301,8 @@ export default function ApprovalsPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="h-11">Cancel</AlertDialogCancel>
-            <AlertDialogAction className={cn('h-11', decisionAction === 'reject' ? 'bg-[#9d403d] text-white hover:bg-[#843532]' : 'bg-[#0b6871] text-white hover:bg-[#075860]')} onClick={confirmDecision}>
-              Confirm {decisionAction === 'changes' ? 'request' : decisionAction}
+            <AlertDialogAction className={cn('h-11', decisionAction === 'reject' ? 'bg-[#9d403d] text-white hover:bg-[#843532]' : 'bg-[#0b6871] text-white hover:bg-[#075860]')} disabled={decisionBusy} aria-busy={decisionBusy} onClick={confirmDecision}>
+              {decisionBusy ? 'Saving…' : `Confirm ${decisionAction === 'changes' ? 'request' : decisionAction}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

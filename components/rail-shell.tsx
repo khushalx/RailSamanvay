@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   CalendarRange,
   LayoutDashboard,
@@ -11,7 +11,7 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { usePrototype } from '@/components/prototype-provider';
 import { cn } from '@/lib/utils';
@@ -32,6 +32,8 @@ const navigation: NavItem[] = [
   { label: 'Audit & Data Health', mobileLabel: 'Audit', href: '/audit-data-health', icon: ScrollText },
 ];
 
+let routesWarmed = false;
+
 function isActive(pathname: string, href: string) {
   if (href === '/weekly-plan') return pathname === '/' || pathname === href;
   return pathname === href;
@@ -39,7 +41,17 @@ function isActive(pathname: string, href: string) {
 
 export function RailShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { pendingCount, hydrated, state } = usePrototype();
+
+  useEffect(() => {
+    if (routesWarmed) return;
+    routesWarmed = true;
+    const timer = window.setTimeout(() => {
+      navigation.forEach((item) => router.prefetch(item.href));
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [router]);
 
   return (
     <div className="min-h-screen bg-[#f6f7f8] text-[#11283a]">
@@ -47,7 +59,7 @@ export function RailShell({ children }: { children: ReactNode }) {
         Skip to content
       </a>
       <header className="sticky top-0 z-40 flex h-16 items-center border-b border-white/10 bg-[#0c2338] px-4 text-white lg:px-6">
-        <Link href="/weekly-plan" className="flex min-w-0 items-center gap-3 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60" aria-label="RailSamanvay home">
+        <Link href="/weekly-plan" prefetch className="flex min-w-0 items-center gap-3 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60" aria-label="RailSamanvay home">
           <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[#0b737a]">
             <TrainFront className="size-5" aria-hidden="true" />
           </span>
@@ -74,7 +86,13 @@ export function RailShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <div className="mx-auto grid min-h-[calc(100vh-64px)] max-w-[1560px] lg:grid-cols-[220px_minmax(0,1fr)]">
+      {!hydrated ? (
+        <output aria-live="polite" className="fixed inset-x-0 top-16 z-50 border-b border-[#cfe1e2] bg-[#eef7f7] px-4 py-2 text-center text-sm font-medium text-[#075f69] shadow-sm">
+          Preparing the demo…
+        </output>
+      ) : null}
+
+      <div inert={!hydrated} className="mx-auto grid min-h-[calc(100vh-64px)] max-w-[1560px] lg:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="hidden border-r border-[#dce3e6] bg-white lg:block">
           <nav aria-label="Primary navigation" className="sticky top-20 space-y-1 p-3 pt-5">
             <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#657682]">Workspace</p>
@@ -85,6 +103,7 @@ export function RailShell({ children }: { children: ReactNode }) {
                 <Link
                   key={item.label}
                   href={item.href}
+                  prefetch
                   aria-current={active ? 'page' : undefined}
                   className={cn(
                     'relative flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#0b737a]/20',
@@ -113,12 +132,12 @@ export function RailShell({ children }: { children: ReactNode }) {
         </main>
       </div>
 
-      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[#dce3e6] bg-white/95 px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5 shadow-[0_-8px_24px_rgba(12,35,56,0.08)] backdrop-blur lg:hidden">
+      <nav inert={!hydrated} aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[#dce3e6] bg-white/95 px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5 shadow-[0_-8px_24px_rgba(12,35,56,0.08)] backdrop-blur lg:hidden">
         {navigation.map((item) => {
           const Icon = item.icon;
           const active = isActive(pathname, item.href);
           return (
-            <Link key={item.label} href={item.href} aria-current={active ? 'page' : undefined} className={cn('relative flex min-h-14 flex-col items-center justify-center gap-1 rounded-lg text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b737a]/30', active ? 'text-[#075f69]' : 'text-[#657682]')}>
+            <Link key={item.label} href={item.href} prefetch aria-current={active ? 'page' : undefined} className={cn('relative flex min-h-14 flex-col items-center justify-center gap-1 rounded-lg text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b737a]/30', active ? 'text-[#075f69]' : 'text-[#657682]')}>
               <Icon className="size-5" strokeWidth={active ? 2.2 : 1.8} aria-hidden="true" />
               <span>{item.mobileLabel}</span>
               {item.count && hydrated && pendingCount > 0 ? (

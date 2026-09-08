@@ -77,6 +77,7 @@ export function WeeklyPlanPage() {
   const [plannerNote, setPlannerNote] = useState('');
   const [notice, setNotice] = useState('');
   const [validating, setValidating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
 
   const plan = plans[state.selectedPlanId];
@@ -141,15 +142,19 @@ export function WeeklyPlanPage() {
   function handleSubmit() {
     if (submitLock.current) return;
     submitLock.current = true;
+    setSubmitting(true);
     const approvalId = submitForReview(plannerNote);
-    submitLock.current = false;
     if (!approvalId) {
       setNotice('Submission blocked. Generate and validate a safe draft first.');
-      return;
+    } else {
+      setReviewOpen(false);
+      setPlannerNote('');
+      setNotice(`${approvalId} is now in the simulated Control Officer queue.`);
     }
-    setReviewOpen(false);
-    setPlannerNote('');
-    setNotice(`${approvalId} is now in the simulated Control Officer queue.`);
+    window.setTimeout(() => {
+      submitLock.current = false;
+      setSubmitting(false);
+    }, 250);
   }
 
   return (
@@ -510,8 +515,9 @@ export function WeeklyPlanPage() {
           </div>
           <DialogFooter>
             <DialogClose render={<Button variant="outline" className="h-11" />}>Cancel</DialogClose>
-            <Button className="h-11 bg-[#0b6871] text-white hover:bg-[#075860]" onClick={handleSubmit}>
-              <Send /> Send for review
+            <Button className="h-11 bg-[#0b6871] text-white hover:bg-[#075860]" disabled={submitting} aria-busy={submitting} onClick={handleSubmit}>
+              {submitting ? <RefreshCw className="motion-safe:animate-spin" /> : <Send />}
+              {submitting ? 'Sending…' : 'Send for review'}
             </Button>
           </DialogFooter>
         </DialogContent>

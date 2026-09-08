@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -27,7 +28,12 @@ import {
   type Task,
 } from '@/lib/rail-data';
 
-const STORAGE_KEY = 'railsamanvay-prototype-v4';
+const STORAGE_KEY = 'railsamanvay-prototype-v5';
+const MAX_APPROVALS = 24;
+const MAX_AUDIT_EVENTS = 60;
+const MAX_TASKS = 24;
+const PLAN_DELAY_MS = 120;
+const VALIDATION_DELAY_MS = 90;
 
 type PrototypeState = {
   division: string;
@@ -134,11 +140,26 @@ function includeMandatory(taskIds: string[], tasks: Task[]) {
   return Array.from(new Set([...taskIds, ...mandatoryIds]));
 }
 
+function cappedAudit(event: AuditEvent, events: AuditEvent[]) {
+  return [event, ...events].slice(0, MAX_AUDIT_EVENTS);
+}
+
+function capStoredState(state: PrototypeState): PrototypeState {
+  return {
+    ...state,
+    tasks: state.tasks.slice(0, MAX_TASKS),
+    approvals: state.approvals.slice(0, MAX_APPROVALS),
+    auditEvents: state.auditEvents.slice(0, MAX_AUDIT_EVENTS),
+  };
+}
+
 const PrototypeContext = createContext<PrototypeContextValue | null>(null);
 
 export function PrototypeProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<PrototypeState>(cloneInitialState);
   const [hydrated, setHydrated] = useState(false);
+  const submittedDrafts = useRef(new Map<string, string>());
+  const decidedApprovals = useRef(new Set<string>());
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -152,7 +173,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             Array.isArray(parsed.auditEvents) &&
             Array.isArray(parsed.sources)
           ) {
-            setState(parsed);
+            setState(capStoredState(parsed));
           }
         }
       } catch {
@@ -167,7 +188,10 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (hydrated) {
       try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        window.localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(capStoredState(state)),
+        );
       } catch {
         // The prototype remains usable when browser storage is unavailable.
       }
@@ -217,7 +241,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       setState((previous) => ({
         ...previous,
         runStatus: 'blocked',
-        auditEvents: [
+        auditEvents: cappedAudit(
           auditEvent(
             'Data quality gate',
             'Generation blocked',
@@ -226,14 +250,14 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
               : 'A planning date is required. No recommendation was produced.',
             previous.recommendationVersion,
           ),
-          ...previous.auditEvents,
-        ],
+          previous.auditEvents,
+        ),
       }));
       return 'blocked';
     }
 
     setState((previous) => ({ ...previous, runStatus: 'running' }));
-    await new Promise((resolve) => window.setTimeout(resolve, 650));
+    await new Promise((resolve) => window.setTimeout(resolve, PLAN_DELAY_MS));
 
     if (state.scenario === 'no-safe-window') {
       setState((previous) => {
@@ -243,15 +267,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
           runStatus: 'infeasible',
           recommendationVersion: version,
           lastRunAt: new Date().toISOString(),
-          auditEvents: [
+          auditEvents: cappedAudit(
             auditEvent(
               'RailSamanvay demo engine',
               'No feasible recommendation',
               'All retained windows conflict with the mandatory task P90 duration or protected train paths.',
               version,
             ),
-            ...previous.auditEvents,
-          ],
+            previous.auditEvents,
+          ),
         };
       });
       return 'infeasible';
@@ -274,15 +298,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         selectedTaskIds: includeMandatory(plans[selectedPlanId].taskIds, previous.tasks),
         draftDirty: false,
         lastRunAt: new Date().toISOString(),
-        auditEvents: [
+        auditEvents: cappedAudit(
           auditEvent(
             'RailSamanvay demo engine',
             'Recommendation generated',
             `Plan ${selectedPlanId} generated for ${previous.section} using the ${previous.scenario} fixture.`,
             version,
           ),
-          ...previous.auditEvents,
-        ],
+          previous.auditEvents,
+        ),
       };
     });
     return 'feasible';
@@ -304,15 +328,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         selectedPlanId: planId,
         selectedTaskIds: nextTaskIds,
         draftDirty: false,
-        auditEvents: [
+        auditEvents: cappedAudit(
           auditEvent(
             'Demo Planner',
             'Alternative selected',
             `Plan ${planId} selected; its fixture-supported task set replaced manual draft edits.`,
             previous.recommendationVersion,
           ),
-          ...previous.auditEvents,
-        ],
+          previous.auditEvents,
+        ),
       };
     });
   }
@@ -328,15 +352,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
           ? previous.selectedTaskIds.filter((id) => id !== taskId)
           : [...previous.selectedTaskIds, taskId],
         draftDirty: true,
-        auditEvents: [
+        auditEvents: cappedAudit(
           auditEvent(
             'Demo Planner',
             included ? 'Task removed from draft' : 'Task added to draft',
             `${taskId} changed; hard constraints require revalidation before submission.`,
             previous.recommendationVersion,
           ),
-          ...previous.auditEvents,
-        ],
+          previous.auditEvents,
+        ),
       };
     });
   }
@@ -350,7 +374,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       state.scenario,
     );
     const valid = evaluation.valid;
-    await new Promise((resolve) => window.setTimeout(resolve, 450));
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, VALIDATION_DELAY_MS),
+    );
     setState((previous) => {
       const detail = valid
         ? `${state.selectedTaskIds.length} selected tasks passed the deterministic fixture constraint check at ${evaluation.safetyMinutes} safety minutes.`
@@ -358,15 +384,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       return {
         ...previous,
         draftDirty: !valid,
-        auditEvents: [
+        auditEvents: cappedAudit(
           auditEvent(
             'RailSamanvay demo engine',
             valid ? 'Draft revalidated' : 'Draft validation failed',
             detail,
             previous.recommendationVersion,
           ),
-          ...previous.auditEvents,
-        ],
+          previous.auditEvents,
+        ),
       };
     });
     return valid;
@@ -397,13 +423,27 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     const version = state.recommendationVersion;
     const recommendationId = `RS-${sectionCode(state.section)}-${state.planningDate.replaceAll('-', '')}-V${version}`;
     const signature = [...state.selectedTaskIds].sort().join('|');
+    const draftKey = `${recommendationId}|${state.selectedPlanId}|${signature}`;
+    const submittedApprovalId = submittedDrafts.current.get(draftKey);
+    if (submittedApprovalId) return submittedApprovalId;
+
     const existing = state.approvals.find(
       (approval) =>
         approval.recommendationId === recommendationId &&
         approval.planId === state.selectedPlanId &&
         [...approval.selectedTaskIds].sort().join('|') === signature,
     );
-    const approvalId = existing?.id ?? `APR-${String(state.approvals.length + 41).padStart(3, '0')}`;
+    if (existing) {
+      submittedDrafts.current.set(draftKey, existing.id);
+      return existing.id;
+    }
+
+    const latestApprovalNumber = state.approvals.reduce((highest, approval) => {
+      const parsed = Number.parseInt(approval.id.replace('APR-', ''), 10);
+      return Number.isFinite(parsed) ? Math.max(highest, parsed) : highest;
+    }, 40);
+    const approvalId = `APR-${String(latestApprovalNumber + 1).padStart(3, '0')}`;
+    submittedDrafts.current.set(draftKey, approvalId);
     const submittedAt = new Date().toISOString();
     const record: Approval = {
       id: approvalId,
@@ -421,20 +461,16 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
     setState((previous) => ({
       ...previous,
-      approvals: existing
-        ? previous.approvals.map((approval) =>
-            approval.id === approvalId ? record : approval,
-          )
-        : [record, ...previous.approvals],
-      auditEvents: [
+      approvals: [record, ...previous.approvals].slice(0, MAX_APPROVALS),
+      auditEvents: cappedAudit(
         auditEvent(
           'Demo Planner',
           'Recommendation submitted',
           `${recommendationId} sent to the simulated Control Officer queue with ${record.selectedTaskIds.length} tasks.`,
           version,
         ),
-        ...previous.auditEvents,
-      ],
+        previous.auditEvents,
+      ),
     }));
     return approvalId;
   }
@@ -445,9 +481,11 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     reason: string,
     alternatePlanId?: PlanId,
   ) {
+    if (decidedApprovals.current.has(approvalId)) return false;
     const approval = state.approvals.find((item) => item.id === approvalId);
     if (!approval || approval.status !== 'Submitted') return false;
     if (action !== 'approve' && !reason.trim()) return false;
+    decidedApprovals.current.add(approvalId);
 
     const status =
       action === 'approve'
@@ -476,15 +514,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             }
           : item,
       ),
-      auditEvents: [
+      auditEvents: cappedAudit(
         auditEvent(
           'Control Officer (simulated)',
           status,
           detail,
           approval.version,
         ),
-        ...previous.auditEvents,
-      ],
+        previous.auditEvents,
+      ),
     }));
     return true;
   }
@@ -542,17 +580,17 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
     setState((previous) => ({
       ...previous,
-      tasks: [task, ...previous.tasks],
+      tasks: [task, ...previous.tasks].slice(0, MAX_TASKS),
       runStatus: 'idle',
-      auditEvents: [
+      auditEvents: cappedAudit(
         auditEvent(
           'Demo Planner',
           'Maintenance task added',
           `${id} added from the prototype form. Recommendation regeneration is required.`,
           previous.recommendationVersion,
         ),
-        ...previous.auditEvents,
-      ],
+        previous.auditEvents,
+      ),
     }));
     return id;
   }
@@ -568,15 +606,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
           ? { ...source, status: 'Stale' }
           : source,
       ),
-      auditEvents: [
+      auditEvents: cappedAudit(
         auditEvent(
           'Data quality gate',
           'COA marked stale',
           'New recommendations are blocked until the demo snapshot is refreshed.',
           previous.recommendationVersion,
         ),
-        ...previous.auditEvents,
-      ],
+        previous.auditEvents,
+      ),
     }));
   }
 
@@ -591,15 +629,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         updatedAt: now,
         status: 'Ready',
       })),
-      auditEvents: [
+      auditEvents: cappedAudit(
         auditEvent(
           'Demo Planner',
           'Synthetic sources refreshed',
           'All fixture timestamps advanced. Existing decisions were preserved; a new run is required.',
           previous.recommendationVersion,
         ),
-        ...previous.auditEvents,
-      ],
+        previous.auditEvents,
+      ),
     }));
   }
 
@@ -616,21 +654,23 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         selectedTaskIds: includeMandatory(plans[nextPlan].taskIds, previous.tasks),
         draftDirty: false,
         lastRunAt: new Date().toISOString(),
-        auditEvents: [
+        auditEvents: cappedAudit(
           auditEvent(
             'RailSamanvay demo engine',
             'Replan produced',
             `A freight path materialised. Draft moved to Plan ${nextPlan}; any already approved record remains frozen and unchanged.`,
             version,
           ),
-          ...previous.auditEvents,
-        ],
+          previous.auditEvents,
+        ),
       };
     });
   }
 
   function resetPrototype() {
     window.localStorage.removeItem(STORAGE_KEY);
+    submittedDrafts.current.clear();
+    decidedApprovals.current.clear();
     setState(cloneInitialState());
   }
 
