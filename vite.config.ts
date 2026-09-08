@@ -66,7 +66,7 @@ export default defineConfig(async ({ mode }) => {
   process.env.WRANGLER_LOG_PATH ??= '.wrangler/logs';
   process.env.MINIFLARE_REGISTRY_PATH ??= '.wrangler/registry';
 
-  const isVercelBuild = mode === 'vercel' || process.env.VERCEL === '1';
+  const isVercelBuild = mode === 'vercel';
 
   if (isVercelBuild) {
     process.env.NITRO_PRESET ??= 'vercel';
