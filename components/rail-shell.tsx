@@ -92,7 +92,7 @@ export function RailShell({ children }: { children: ReactNode }) {
         </output>
       ) : null}
 
-      <div inert={!hydrated} className="mx-auto grid min-h-[calc(100vh-64px)] max-w-[1560px] lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="mx-auto grid min-h-[calc(100vh-64px)] max-w-[1560px] lg:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="hidden border-r border-[#dce3e6] bg-white lg:block">
           <nav aria-label="Primary navigation" className="sticky top-20 space-y-1 p-3 pt-5">
             <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#657682]">Workspace</p>
@@ -127,12 +127,12 @@ export function RailShell({ children }: { children: ReactNode }) {
           </nav>
         </aside>
 
-        <main id="main-content" className="min-w-0 px-4 py-5 pb-24 sm:px-6 lg:px-8 lg:py-7">
+        <main inert={!hydrated} id="main-content" className="min-w-0 px-4 py-5 pb-24 sm:px-6 lg:px-8 lg:py-7">
           <div className="mx-auto max-w-[1180px]">{children}</div>
         </main>
       </div>
 
-      <nav inert={!hydrated} aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[#dce3e6] bg-white/95 px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5 shadow-[0_-8px_24px_rgba(12,35,56,0.08)] backdrop-blur lg:hidden">
+      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[#dce3e6] bg-white/95 px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5 shadow-[0_-8px_24px_rgba(12,35,56,0.08)] backdrop-blur lg:hidden">
         {navigation.map((item) => {
           const Icon = item.icon;
           const active = isActive(pathname, item.href);
